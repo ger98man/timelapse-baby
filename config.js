@@ -10,7 +10,7 @@ export const GOOGLE = {
   // OAuth Client ID из Google Cloud Console, тип «Web application».
   // В Authorized JavaScript origins должны быть перечислены адреса, откуда
   // приложение открывают, — боевой и http://localhost:8787 для разработки.
-  clientId: '',
+  clientId: '648285324676-cugi2quf38npk0arn1qube3ks1didua3.apps.googleusercontent.com',
 
   // API key — нужен для окна выбора общей папки (второй родитель).
   apiKey: '',
