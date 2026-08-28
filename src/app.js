@@ -931,6 +931,14 @@ async function maybeReset() {
 
 async function boot() {
   if (await maybeReset()) return;
+
+  // Регистрируем раньше всего остального: онбординг может занять минуты, и всё
+  // это время приложение оставалось бы без офлайновой оболочки. Путь
+  // относительный — приложение может лежать и в подпапке (GitHub Pages).
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
   state.cfg = await settings.all();
 
   if (state.cfg.lockHash) await askCode();
@@ -954,10 +962,6 @@ async function boot() {
   requestPersistence().catch(() => {});
   syncQuietly();
   window.addEventListener('online', syncQuietly);
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
 }
 
 boot();
