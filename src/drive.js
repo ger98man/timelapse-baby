@@ -46,7 +46,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return parts.filter(Boolean).join(' and ');
   }
 
-  async function list(query, fields = 'files(id,name,mimeType,modifiedTime,appProperties,parents),nextPageToken') {
+  async function list(query, fields = 'files(id,name,mimeType,modifiedTime,md5Checksum,appProperties,parents,thumbnailLink),nextPageToken') {
     const out = [];
     let pageToken;
     do {
@@ -138,8 +138,8 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
     const { body, type } = multipart(meta, blob, mime);
     const url = fileId
-      ? `${UPLOAD}/files/${fileId}?uploadType=multipart&fields=id,modifiedTime`
-      : `${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime`;
+      ? `${UPLOAD}/files/${fileId}?uploadType=multipart&fields=id,modifiedTime,md5Checksum`
+      : `${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime,md5Checksum`;
     return call(url, { method: fileId ? 'PATCH' : 'POST', body, headers: { 'Content-Type': type } });
   }
 
@@ -169,6 +169,30 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return res.blob();
   }
 
+  /**
+   * Миниатюра, которую Google уже сделал сам. Приезжает вместе со списком
+   * файлов, весит килобайты вместо мегабайт и не требует качать оригинал —
+   * на этом держится дешёвый календарь.
+   *
+   * Ссылка короткоживущая и на чужом хосте, поэтому запрос идёт с токеном и
+   * без ретраев: протухла — обновим список файлов и получим новую.
+   */
+  async function downloadThumb(link, size = 400) {
+    if (!link) return null;
+    // ...=s220 в конце — запрошенный размер; просим свой
+    const url = /=s\d+/.test(link) ? link.replace(/=s\d+.*$/, `=s${size}`) : `${link}=s${size}`;
+    const token = await getToken();
+    const res = await fetchImpl(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (!res.ok) throw new Error(`Миниатюра: ${res.status}`);
+    return res.blob();
+  }
+
+  /** Свежая ссылка на миниатюру одного файла — когда список уже протух. */
+  async function thumbLink(fileId) {
+    const f = await call(`${API}/files/${fileId}?fields=thumbnailLink`);
+    return f.thumbnailLink || null;
+  }
+
   async function trash(fileId) {
     return call(`${API}/files/${fileId}`, {
       method: 'PATCH',
@@ -195,6 +219,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     ensureRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, download, trash, folderLink,
+    listDayFiles, download, downloadThumb, thumbLink, trash, folderLink,
   };
 }

@@ -22,15 +22,17 @@
 </head>
 <body>
 <h1>Проверка хранилища</h1>
-<p class="lead">Вместо Google Диска — заглушка в памяти. Проверяется главное
-свойство новой модели: правда живёт в папке, а локальная база — выбрасываемая
-копия. Значит, любая правка обязана доходить до папки, а всё, чего в папке нет,
-обязано исчезать с телефона.</p>
+<p class="lead">Вместо Google Диска — заглушка в памяти. Проверяются два
+свойства модели. Первое: правда живёт в папке, а локальная база —
+выбрасываемая копия, поэтому любая правка обязана доходить до папки, а всё,
+чего в папке нет, обязано исчезать с телефона. Второе: копия наполняется по
+мере надобности — обновление читает опись, а снимки качаются, только когда их
+собрались показать или собрать в видео.</p>
 <div id="out"></div>
 <div id="summary"></div>
 
 <script type="module">
-import { entries, settings } from '../src/db.js';
+import { entries, blobs, settings, clearCache } from '../src/db.js';
 import * as store from '../src/store.js';
 import { pushProfile } from '../src/profile.js';
 
@@ -55,12 +57,14 @@ function check(label, condition, detail = '') {
 // --- поддельная папка -------------------------------------------------------
 function fakeDrive() {
   const files = new Map();
-  let seq = 0;
+  const downloads = [];      // что и сколько раз качали — главное в этих тестах
+  let seq = 0, sums = 0;
   let clock = Date.now() - 3600000;
   const tick = () => new Date(clock += 60000).toISOString();
 
   return {
     files,
+    downloads,
     async ensureRoot(name, known) { return known || 'root'; },
     async adoptRoot(id) { return id; },
     async putDayFile({ dateKey, name, blob, kind, fileId, props }) {
@@ -72,8 +76,10 @@ function fakeDrive() {
       };
       if (dateKey) appProperties.day = dateKey;
       const modifiedTime = tick();
-      files.set(id, { id, name, blob, modifiedTime, appProperties });
-      return { id, modifiedTime };
+      // Диск считает контрольную сумму содержимого; правка метаданных её не меняет
+      const md5Checksum = 'md5-' + (++sums);
+      files.set(id, { id, name, blob, modifiedTime, md5Checksum, appProperties });
+      return { id, modifiedTime, md5Checksum };
     },
     async updateProps(id, props) {
       const f = files.get(id);
@@ -82,10 +88,25 @@ function fakeDrive() {
       return { id, modifiedTime: f.modifiedTime };
     },
     async listDayFiles() {
-      return [...files.values()].map(f => ({ ...f, appProperties: { ...f.appProperties } }));
+      return [...files.values()].map(f => ({
+        ...f,
+        appProperties: { ...f.appProperties },
+        // Google отдаёт ссылку на готовую миниатюру прямо в описи
+        thumbnailLink: f.appProperties.kind === 'photo' ? `thumb:${f.id}=s220` : undefined,
+      }));
     },
-    async download(id) { return files.get(id).blob; },
+    async download(id) {
+      downloads.push(files.get(id).appProperties.kind || 'photo');
+      return files.get(id).blob;
+    },
+    async thumbLink(id) { return `thumb:${id}=s220`; },
+    async downloadThumb(link) {
+      const id = String(link).split(':')[1].split('=')[0];
+      downloads.push('thumb');
+      return files.get(id).blob;      // как будто Google уже уменьшил
+    },
     async trash(id) { files.delete(id); },
+    pulled(kind) { return downloads.filter(k => k === kind).length; },
     count(kind) { return [...files.values()].filter(f => f.appProperties.kind === kind).length; },
     dayFile(day, kind = 'photo') {
       return [...files.values()].find(f => f.appProperties.day === day && f.appProperties.kind === kind);
@@ -104,7 +125,7 @@ async function jpeg(tint) {
 
 // --- прогон -----------------------------------------------------------------
 (async () => {
-  await entries.clear();
+  await clearCache();
   await settings.merge({ driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null });
   const drive = fakeDrive();
 
@@ -115,7 +136,8 @@ async function jpeg(tint) {
   check('в кэше два дня', (await entries.allDates()).length === 2);
   const cached = await entries.get('2026-09-10');
   check('кэш помнит файл папки', Boolean(cached.fileId && cached.modifiedTime));
-  check('выровненный кадр построен', Boolean(cached.aligned));
+  check('миниатюра построена по оригиналу', cached.thumbFrom === 'master' && Boolean(cached.thumb));
+  check('выровненный кадр построен', Boolean((await blobs.get('2026-09-10')).aligned));
   check('имя файла по дате', drive.dayFile('2026-09-10').name === '2026-09-10.jpg');
 
   caseOf('Комментарий — отдельный файл рядом');
@@ -136,25 +158,58 @@ async function jpeg(tint) {
   check('снимок не перезаливали', drive.dayFile('2026-09-11').blob.size === sizeBefore);
   check('кэш знает про разметку', Boolean((await entries.get('2026-09-11')).eyes));
 
-  caseOf('Кэш выбрасывается и собирается заново из папки');
-  await entries.clear();
+  caseOf('Обновление читает опись, а не качает снимки');
+  await clearCache();
   check('кэш пуст', (await entries.allDates()).length === 0);
+  drive.downloads.length = 0;
   let r = await store.refresh(drive);
-  check('вернулись оба дня', (await entries.allDates()).length === 2, `loaded=${r.loaded}`);
+  check('вернулись оба дня', (await entries.allDates()).length === 2, `days=${r.days}`);
+  check('снимки не качались', drive.pulled('photo') === 0, `скачано=${drive.pulled('photo')}`);
+  check('тел в базе нет', (await blobs.count()) === 0);
   const back = await entries.get('2026-09-11');
-  check('снимок на месте', back.photo && back.photo.size > 0);
-  check('разметка вернулась', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
-  check('выровненный кадр пересобран', Boolean(back.aligned));
+  check('разметка вернулась описью', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
+
+  caseOf('Календарю хватает миниатюры Диска');
+  drive.downloads.length = 0;
+  const withThumb = await store.ensureThumb(drive, '2026-09-11');
+  check('миниатюра появилась', Boolean(withThumb.thumb));
+  check('взята готовая, из Диска', withThumb.thumbFrom === 'drive');
+  check('оригинал так и не скачан', drive.pulled('photo') === 0);
+  check('второй раз ничего не качает',
+    (drive.downloads.length = 0, await store.ensureThumb(drive, '2026-09-11'),
+     drive.downloads.length === 0));
+
+  caseOf('Снимок качается, когда его правда попросили');
+  drive.downloads.length = 0;
+  const got = await store.ensureBody(drive, '2026-09-11');
+  check('тело приехало', got.body.photo.size > 0);
+  check('выровненный кадр пересобран', Boolean(got.body.aligned));
+  check('миниатюра стала своей', got.entry.thumbFrom === 'master');
+  check('скачан ровно один снимок', drive.pulled('photo') === 1, `скачано=${drive.pulled('photo')}`);
+  drive.downloads.length = 0;
+  await store.ensureBody(drive, '2026-09-11');
+  check('повторно не качается', drive.pulled('photo') === 0);
+  const missing = await store.missingBodies(['2026-09-10', '2026-09-11']);
+  check('видно, чего ещё нет', missing.length === 1 && missing[0] === '2026-09-10',
+    JSON.stringify(missing));
+  const bulk = await store.ensureBodies(drive, ['2026-09-10', '2026-09-11']);
+  check('пачкой доедет только недостающее', bulk.loaded === 1 && bulk.total === 1,
+    JSON.stringify(bulk));
 
   caseOf('Повторное обновление ничего не качает');
+  drive.downloads.length = 0;
   r = await store.refresh(drive);
-  check('загрузок нет', r.loaded === 0, `loaded=${r.loaded}`);
+  check('новых дней нет', r.added === 0, `added=${r.added}`);
+  check('изменений нет', r.changed === 0, `changed=${r.changed}`);
   check('удалений нет', r.dropped === 0, `dropped=${r.dropped}`);
+  check('трафика нет', drive.pulled('photo') === 0 && drive.pulled('thumb') === 0);
+  check('тела на месте', (await blobs.count()) === 2);
 
   caseOf('Удаление дня доходит до папки');
   await store.removeDay(drive, '2026-09-10');
   check('снимок из папки исчез', !drive.dayFile('2026-09-10'));
   check('день исчез из кэша', !(await entries.get('2026-09-10')));
+  check('тело исчезло тоже', !(await blobs.get('2026-09-10')));
   r = await store.refresh(drive);
   check('и не возвращается после обновления', !(await entries.get('2026-09-10')),
     `дней=${(await entries.allDates()).length}`);
@@ -165,17 +220,46 @@ async function jpeg(tint) {
     blob: await jpeg('#69c'), kind: 'photo' });
   await drive.putDayFile({ rootId: 'root', dateKey: '2026-09-11', name: '2026-09-11.txt',
     blob: new Blob(['подписал со своего телефона']), kind: 'note' });
+  drive.downloads.length = 0;
   r = await store.refresh(drive);
-  check('новый день приехал', Boolean(await entries.get('2026-09-12')), `loaded=${r.loaded}`);
-  check('чужой комментарий приехал',
+  check('новый день приехал', Boolean(await entries.get('2026-09-12')), `added=${r.added}`);
+  check('снимок нового дня не качали', drive.pulled('photo') === 0);
+  check('чужой комментарий отмечен как отставший',
+    (await entries.get('2026-09-11')).noteStale === true);
+  drive.downloads.length = 0;
+  await store.ensureNote(drive, '2026-09-11');
+  check('и приезжает отдельно от снимка',
     (await entries.get('2026-09-11')).comment === 'подписал со своего телефона',
     JSON.stringify((await entries.get('2026-09-11')).comment));
+  check('снимок ради комментария не качали', drive.pulled('photo') === 0);
+  await store.ensureBody(drive, '2026-09-11');
+
+  // чужая разметка правит кадр на месте, не перекачивая снимок
+  drive.downloads.length = 0;
+  await drive.updateProps(drive.dayFile('2026-09-11').id, { eyes: '0.30,0.30,0.70,0.30' });
+  await store.refresh(drive);
+  const remarked = await entries.get('2026-09-11');
+  check('чужая разметка приехала', remarked.eyes && Math.abs(remarked.eyes.lx - 0.30) < 1e-4);
+  check('снимок ради неё не качали', drive.pulled('photo') === 0);
+  check('кадр пересобран на месте', Boolean((await blobs.get('2026-09-11')).aligned));
 
   // а теперь второй родитель удалил день у себя
   drive.files.delete(drive.dayFile('2026-09-12').id);
   r = await store.refresh(drive);
   check('удалённый другим день ушёл и здесь', !(await entries.get('2026-09-12')),
     `dropped=${r.dropped}`);
+
+  caseOf('Переснятый день выбрасывает старое тело');
+  await store.putPhoto(drive, '2026-09-11', await jpeg('#c69'));
+  check('тело переснятого дня на месте', Boolean((await blobs.get('2026-09-11')).photo));
+  // как будто переснял второй родитель: id тот же, время правки другое
+  const file = drive.dayFile('2026-09-11');
+  file.blob = await jpeg('#96c');
+  file.md5Checksum = 'md5-чужой';
+  file.modifiedTime = new Date(Date.now() + 60000).toISOString();
+  await store.refresh(drive);
+  check('чужая пересъёмка выбросила устаревшее тело', !(await blobs.get('2026-09-11')));
+  check('день при этом остался', Boolean(await entries.get('2026-09-11')));
 
   caseOf('Настройки живут в папке');
   await settings.merge({ babyName: 'Ева', birthDate: '2026-09-01' });
@@ -188,7 +272,7 @@ async function jpeg(tint) {
   check('дата вернулась из папки', cfg.birthDate === '2026-09-01');
   check('лишних config.json нет', drive.count('config') === 1);
 
-  await entries.clear();
+  await clearCache();
   await settings.merge({ babyName: '', birthDate: null, driveFolderId: null, profileFileId: null });
 
   const s = document.getElementById('summary');

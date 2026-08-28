@@ -57,21 +57,6 @@ export async function toMaster(blob, maxDim = 2560, quality = 0.92) {
   }
 }
 
-/** Квадратная миниатюра для календаря. */
-export async function makeThumb(blob, size = 320) {
-  const { img, width, height, release } = await loadImage(blob);
-  try {
-    const canvas = makeCanvas(size, size);
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingQuality = 'high';
-    const side = Math.min(width, height);
-    ctx.drawImage(img, (width - side) / 2, (height - side) / 2, side, side, 0, 0, size, size);
-    return canvasToBlob(canvas, 'image/jpeg', 0.8);
-  } finally {
-    release();
-  }
-}
-
 export function formatBytes(n) {
   if (!n) return '0 МБ';
   const mb = n / 1048576;

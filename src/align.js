@@ -1,4 +1,4 @@
-import { loadImage, makeCanvas, canvasToBlob, makeThumb } from './img.js';
+import { loadImage, makeCanvas, canvasToBlob } from './img.js';
 
 // Выравнивание по глазам — то, что отличает таймлапс от дёргающегося слайдшоу.
 // Считаем similarity-трансформацию (поворот + масштаб + сдвиг), которая ставит
@@ -61,38 +61,48 @@ export function drawCover(ctx, img, iw, ih, size) {
   ctx.drawImage(img, (iw - side) / 2, (ih - side) / 2, side, side, 0, 0, size, size);
 }
 
-// --- Кэш выровненных кадров -------------------------------------------------
-// Выровненный кадр — всегда пересоздаваемый артефакт поверх мастер-кадра.
-// Хранится ради скорости (видео и превью не декодируют мегапиксельные снимки),
-// и его можно выбросить целиком в любой момент.
+// --- Производные кадры ------------------------------------------------------
+// Выровненный кадр и миниатюра — всегда пересоздаваемые артефакты поверх
+// оригинала. Хранятся ради скорости (видео и календарь не декодируют
+// мегапиксельные снимки), и любой из них можно выбросить в любой момент.
 
-export async function renderAlignedBlob(entry, { size = 1080, target = DEFAULT_TARGET } = {}) {
-  const { img, width, height, release } = await loadImage(entry.photo);
+export const THUMB_SIZE = 320;
+
+/**
+ * Квадратный кадр из чего угодно: из мастер-кадра, из миниатюры Диска.
+ * Координаты глаз — доли от размера источника, поэтому одна и та же разметка
+ * одинаково ложится и на снимок в 2560 пикселей, и на миниатюру в 400.
+ */
+export async function renderSquareBlob(source, { size = 1080, eyes = null,
+                                                 target = DEFAULT_TARGET,
+                                                 quality = 0.88 } = {}) {
+  const { img, width, height, release } = await loadImage(source);
   try {
     const canvas = makeCanvas(size, size);
     const ctx = canvas.getContext('2d');
-    drawAligned(ctx, img, width, height, size, entry.eyes, target);
-    return canvasToBlob(canvas, 'image/jpeg', 0.88);
+    drawAligned(ctx, img, width, height, size, eyes, target);
+    return canvasToBlob(canvas, 'image/jpeg', quality);
   } finally {
     release();
   }
 }
 
 /**
- * Пересоздаёт всё, что выводится из мастер-кадра: выровненный кадр и миниатюру.
+ * Всё, что выводится из мастер-кадра.
  *
  * Миниатюра берётся из выровненного кадра, если глаза отмечены. Иначе в
  * календаре и на «Сегодня» человек видел бы центральный кроп, а в таймлапс
  * уезжало бы совсем другое — и разметка выглядела бы бесполезной, пока не
  * соберёшь видео.
  */
-export async function buildDerived(entry, { size = 1080, target = DEFAULT_TARGET } = {}) {
-  if (!entry.photo) {
-    entry.aligned = null;
-    entry.thumb = null;
-    return entry;
-  }
-  entry.aligned = await renderAlignedBlob(entry, { size, target });
-  entry.thumb = await makeThumb(entry.eyes ? entry.aligned : entry.photo);
-  return entry;
+export async function deriveFrom(photo, eyes, { size = 1080, target = DEFAULT_TARGET } = {}) {
+  const aligned = await renderSquareBlob(photo, { size, eyes, target, quality: 0.88 });
+  const thumb = await renderSquareBlob(eyes ? aligned : photo,
+    { size: THUMB_SIZE, target, quality: 0.8 });
+  return { aligned, thumb };
+}
+
+/** Миниатюра из дешёвого источника — когда мастер-кадра на телефоне ещё нет. */
+export function thumbFrom(source, eyes, target = DEFAULT_TARGET) {
+  return renderSquareBlob(source, { size: THUMB_SIZE, eyes, target, quality: 0.8 });
 }

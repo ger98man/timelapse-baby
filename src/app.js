@@ -1,7 +1,7 @@
-import { entries, settings, requestPersistence, storageEstimate, DB_NAME } from './db.js';
+import { entries, blobs, settings, requestPersistence, storageEstimate, DB_NAME } from './db.js';
 import * as D from './dates.js';
-import { toMaster, formatBytes } from './img.js';
-import { buildDerived } from './align.js';
+import { formatBytes } from './img.js';
+import { deriveFrom } from './align.js';
 import { buildVideo, playFrames, videoSupported } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
@@ -108,20 +108,67 @@ async function saveBlob(blob, filename) {
 
 function targetFromCfg(cfg) { return cfg.eyeTarget; }
 
-/** Пересобирает выровненный кадр и миниатюру записи. */
-function refreshAligned(entry) {
-  return buildDerived(entry, {
-    size: state.cfg.videoSize,
-    target: targetFromCfg(state.cfg),
-  });
+/**
+ * Что показывать человеку. С отмеченными глазами — выровненный кадр: на экране
+ * должно быть ровно то, что попадёт в таймлапс. Тела на телефоне может не быть
+ * вовсе — тогда остаётся миниатюра, которой хватает, чтобы день не выглядел
+ * пустым, пока снимок едет.
+ */
+function faceOf(entry, body) {
+  if (body && body.photo) return entry.eyes && body.aligned ? body.aligned : body.photo;
+  return entry.thumb || null;
+}
+
+/** Рисует снимок дня в слоте: сам кадр и подпись под ним. */
+function paintPhoto(slotId, entry, body) {
+  const slot = $(slotId);
+  slot.innerHTML = '';
+  const face = faceOf(entry, body);
+  if (face) {
+    const img = document.createElement('img');
+    img.src = url(face);
+    img.alt = '';
+    slot.appendChild(img);
+  }
+  const badge = document.createElement('div');
+  badge.className = 'badge';
+  badge.textContent = !body
+    ? (canPull() ? 'загружаю снимок…' : 'снимок не загружен на этот телефон')
+    : entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
+  slot.appendChild(badge);
+}
+
+/** Есть ли откуда качать: папка подключена и сеть на месте. */
+function canPull() {
+  return Boolean(configured() && state.cfg.driveEmail && navigator.onLine);
 }
 
 /**
- * Что показывать человеку. С отмеченными глазами — выровненный кадр: на экране
- * должно быть ровно то, что попадёт в таймлапс.
+ * Подтягивает комментарий, если его правили с другого телефона. Он крошечный,
+ * поэтому его ждут на месте, а не подменяют текст под руками у человека.
  */
-function faceOf(entry) {
-  return entry.eyes && entry.aligned ? entry.aligned : entry.photo;
+async function pullNote(key) {
+  if (!canPull()) return null;
+  try {
+    return await store.ensureNote(drive(), key);
+  } catch {
+    return null;      // покажем ту копию, что есть
+  }
+}
+
+/**
+ * Дотягивает снимок за день. Тела качаются по требованию, поэтому экран сначала
+ * рисуется по тому, что уже есть, и только потом обновляется настоящим кадром.
+ * @returns {Promise<boolean>} появилось ли что-то новое
+ */
+async function pullBody(key, { silent = true } = {}) {
+  if (!canPull()) return false;
+  try {
+    return Boolean(await store.ensureBody(drive(), key, { cfg: state.cfg }));
+  } catch (e) {
+    if (!silent) toast(e.message || 'Не удалось загрузить снимок');
+    return false;
+  }
 }
 
 // --- Google -----------------------------------------------------------------
@@ -142,13 +189,15 @@ async function runSync() {
     });
     progressClose();
     const parts = [];
-    if (res.loaded) parts.push(`загружено дней: ${res.loaded}`);
+    if (res.added) parts.push(`новых дней: ${res.added}`);
+    if (res.changed) parts.push(`обновлено: ${res.changed}`);
     if (res.dropped) parts.push(`удалено: ${res.dropped}`);
     toast(parts.length ? parts.join(', ') : 'Всё уже на месте');
     state.cfg = await settings.all();
     applyTheme(state.cfg.theme);
     freeUrls();
     await renderToday();
+    if (!$('screen-calendar').classList.contains('hidden')) await renderCalendar();
     await renderMore();
   } catch (e) {
     progressClose();
@@ -189,7 +238,12 @@ function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
   if (!navigator.onLine) return;
   store.refresh(drive())
-    .then(() => settings.all().then(c => { state.cfg = c; applyTheme(c.theme); }))
+    .then(() => settings.all())
+    .then(c => {
+      state.cfg = c;
+      applyTheme(c.theme);
+      if (!$('screen-calendar').classList.contains('hidden')) return renderCalendar();
+    })
     .catch(() => { /* обновится при следующей возможности */ });
 }
 
@@ -254,21 +308,25 @@ async function renderToday() {
   $('today-title').textContent = info.label;
   $('today-sub').textContent = name + D.formatLong(key) + (info.sub ? ` · ${info.sub}` : '');
 
-  const entry = await entries.get(key);
+  let entry = await entries.get(key);
+  if (entry && entry.noteStale) entry = await pullNote(key) || entry;
+  const body = entry && entry.fileId ? await blobs.get(key) : null;
   const slot = $('today-photo');
   slot.innerHTML = '';
 
-  if (entry && entry.photo) {
-    const img = document.createElement('img');
-    img.src = url(faceOf(entry));
-    img.alt = '';
-    slot.appendChild(img);
-    const badge = document.createElement('div');
-    badge.className = 'badge';
-    badge.textContent = entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
-    slot.appendChild(badge);
+  if (entry && entry.fileId) {
+    paintPhoto('today-photo', entry, body);
     $('today-actions').classList.remove('hidden');
     $('btn-camera-label').textContent = 'Переснять';
+    // Сегодняшний день смотрят чаще всего, поэтому его снимок дотягиваем сразу.
+    // Перерисовываем при этом только сам кадр: человек мог уже начать печатать
+    // комментарий, и подменять поле под руками нельзя.
+    if (!body) {
+      pullBody(key).then(async got => {
+        if (!got || D.todayKey() !== key) return;
+        paintPhoto('today-photo', await entries.get(key), await blobs.get(key));
+      });
+    }
   } else {
     slot.innerHTML = `<div class="photo-empty">
       <svg viewBox="0 0 24 24" width="42" height="42"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="13.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
@@ -279,7 +337,7 @@ async function renderToday() {
 
   $('today-comment').value = entry ? (entry.comment || '') : '';
   applyOnlineState();
-  const hasPhoto = Boolean(entry && entry.photo);
+  const hasPhoto = Boolean(entry && entry.fileId);
   $('today-comment').disabled = $('today-comment').disabled || !hasPhoto;
   $('today-comment').placeholder = hasPhoto
     ? 'Что было сегодня…' : 'Сначала снимите кадр';
@@ -356,12 +414,10 @@ async function renderCalendar() {
     cell.dataset.date = key;
     if (key === today) cell.classList.add('is-today');
     if (key > today) cell.classList.add('future');
-    if (entry && entry.thumb) {
+    if (entry && entry.fileId) {
       cell.classList.add('has-photo');
-      const img = document.createElement('img');
-      img.src = url(entry.thumb);
-      img.alt = '';
-      cell.appendChild(img);
+      if (entry.thumb) paintThumb(cell, entry.thumb);
+      else cell.classList.add('no-thumb');   // день снят, миниатюра ещё едет
     }
     const num = document.createElement('span');
     num.className = 'num';
@@ -372,9 +428,48 @@ async function renderCalendar() {
   }
 
   const total = (await entries.allDates()).length;
-  const inMonth = rows.filter(r => r.photo).length;
+  const inMonth = rows.filter(r => r.fileId).length;
   $('cal-stats').textContent =
     `${inMonth} ${D.plural(inMonth, 'день', 'дня', 'дней')} в этом месяце · ${total} всего`;
+
+  loadMonthThumbs(rows.filter(r => r.fileId && !r.thumb).map(r => r.date));
+}
+
+/** Миниатюра в клетке календаря: картинка ложится под номер дня. */
+function paintThumb(cell, blob) {
+  cell.classList.remove('no-thumb');
+  const img = document.createElement('img');
+  img.src = url(blob);
+  img.alt = '';
+  cell.insertBefore(img, cell.firstChild);
+}
+
+/**
+ * Миниатюры видимого месяца — единственное, что календарь вообще качает.
+ * Их делает сам Google, поэтому день стоит килобайтов, а не мегабайтов, и
+ * платим мы только за те месяцы, которые открыли.
+ *
+ * Ушли на другой месяц — прошлая очередь бросается: догружать то, чего уже
+ * никто не видит, значит тратить чужой трафик впустую.
+ */
+let thumbRun = 0;
+async function loadMonthThumbs(days) {
+  const token = ++thumbRun;
+  if (!days.length || !canPull()) return;
+  const d = drive();
+  for (const date of days) {
+    if (token !== thumbRun) return;
+    let entry;
+    try {
+      entry = await store.ensureThumb(d, date, { cfg: state.cfg });
+    } catch {
+      continue;         // нет миниатюры — в клетке останется галочка
+    }
+    if (token !== thumbRun) return;
+    if (!entry || !entry.thumb) continue;
+    const cell = $('cal-grid').querySelector(`[data-date="${date}"]`);
+    if (cell) paintThumb(cell, entry.thumb);
+  }
 }
 
 // --- карточка дня -----------------------------------------------------------
@@ -387,19 +482,14 @@ async function openDay(key) {
   $('day-title').textContent = info.label;
   $('day-sub').textContent = D.formatLong(key) + (info.sub ? ` · ${info.sub}` : '');
 
-  const entry = await entries.get(key);
+  let entry = await entries.get(key);
+  if (entry && entry.noteStale) entry = await pullNote(key) || entry;
+  const body = entry && entry.fileId ? await blobs.get(key) : null;
   const slot = $('day-photo');
   slot.innerHTML = '';
 
-  if (entry && entry.photo) {
-    const img = document.createElement('img');
-    img.src = url(faceOf(entry));
-    img.alt = '';
-    slot.appendChild(img);
-    const badge = document.createElement('div');
-    badge.className = 'badge';
-    badge.textContent = entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
-    slot.appendChild(badge);
+  if (entry && entry.fileId) {
+    paintPhoto('day-photo', entry, body);
     $('day-align').classList.remove('hidden');
     $('day-replace').classList.remove('hidden');
     $('day-add').classList.add('hidden');
@@ -415,11 +505,20 @@ async function openDay(key) {
   $('day-comment').value = entry ? (entry.comment || '') : '';
   applyOnlineState();
   // Комментарий лежит файлом рядом со снимком, поэтому без снимка ему негде быть
-  const hasPhoto = Boolean(entry && entry.photo);
+  const hasPhoto = Boolean(entry && entry.fileId);
   $('day-comment').disabled = $('day-comment').disabled || !hasPhoto;
   $('day-comment').placeholder = hasPhoto
     ? 'Комментарий…' : 'Сначала добавьте фото за этот день';
   $('overlay-day').classList.remove('hidden');
+
+  // Открыли день — значит, снимок и правда нужен: качаем именно его одного.
+  // Как и на «Сегодня», меняем только кадр, не трогая поле комментария.
+  if (hasPhoto && !body) {
+    pullBody(key).then(async got => {
+      if (!got || dayKey !== key || $('overlay-day').classList.contains('hidden')) return;
+      paintPhoto('day-photo', await entries.get(key), await blobs.get(key));
+    });
+  }
 }
 
 function closeDay() {
@@ -445,10 +544,20 @@ async function saveComment(key, text) {
 
 async function openAlign(key) {
   const entry = await entries.get(key);
-  if (!entry || !entry.photo) return;
+  if (!entry || !entry.fileId) return;
+
+  // Размечают по оригиналу, поэтому здесь тело нужно обязательно.
+  let body = await blobs.get(key);
+  if (!body || !body.photo) {
+    progressOpen('Загружаю снимок');
+    const got = await pullBody(key, { silent: false });
+    progressClose();
+    body = got ? await blobs.get(key) : null;
+    if (!body || !body.photo) { toast('Нужна сеть, чтобы разметить этот кадр'); return; }
+  }
 
   const img = $('align-img');
-  img.src = url(entry.photo);
+  img.src = url(body.photo);
   $('align-title').textContent = D.dayLabel(key, state.cfg).label;
 
   state.align = { key, entry, l: entry.eyes ? { x: entry.eyes.lx, y: entry.eyes.ly } : null,
@@ -539,27 +648,66 @@ async function saveAlign() {
 
 // --- видео ------------------------------------------------------------------
 
-async function videoFrames() {
+/** Дни выбранного промежутка, у которых в папке есть снимок. */
+async function videoDays() {
   const from = $('video-from').value || '0000-01-01';
   const to = $('video-to').value || '9999-12-31';
   const rows = await entries.range(from, to);
-  return rows.filter(r => r.aligned).map(r => ({ date: r.date, blob: r.aligned }));
+  return rows.filter(r => r.fileId).map(r => r.date);
+}
+
+/** Выровненные кадры из того, что уже лежит на телефоне. */
+async function videoFrames() {
+  const out = [];
+  for (const date of await videoDays()) {
+    const body = await blobs.get(date);
+    if (body && body.aligned) out.push({ date, blob: body.aligned });
+  }
+  return out;
+}
+
+/**
+ * Кадры для сборки. Здесь и только здесь качается вся история целиком: видео
+ * иначе не собрать. Зато человек платит за это осознанно — нажав кнопку, а не
+ * открыв приложение.
+ */
+async function framesForBuild() {
+  const days = await videoDays();
+  if (!days.length) return [];
+  const missing = await store.missingBodies(days);
+  if (missing.length) {
+    if (!canPull()) {
+      toast(`Без сети собираю из ${days.length - missing.length} загруженных кадров`, 3600);
+    } else {
+      progressOpen('Загружаю кадры');
+      try {
+        await store.ensureBodies(drive(), days,
+          { onProgress: (d, t, label) => progressSet(d, t, label) });
+      } catch (e) {
+        toast(e.message || 'Не все кадры удалось загрузить');
+      }
+      progressClose();
+    }
+  }
+  return videoFrames();
 }
 
 async function refreshVideoInfo() {
-  const frames = await videoFrames();
+  const days = await videoDays();
+  const missing = days.length ? await store.missingBodies(days) : [];
   const fps = Number($('video-fps').value);
-  const secs = frames.length / fps;
-  $('video-info').textContent = frames.length
-    ? `${frames.length} ${D.plural(frames.length, 'кадр', 'кадра', 'кадров')} · примерно ${secs.toFixed(1)} с`
+  const secs = days.length / fps;
+  const note = missing.length ? ` · ${missing.length} ещё не загружено` : '';
+  $('video-info').textContent = days.length
+    ? `${days.length} ${D.plural(days.length, 'кадр', 'кадра', 'кадров')} · примерно ${secs.toFixed(1)} с${note}`
     : 'В этом промежутке ещё нет кадров.';
-  $('btn-render').disabled = !frames.length;
-  $('btn-preview').disabled = !frames.length;
-  $('btn-frames-zip').disabled = !frames.length;
+  $('btn-render').disabled = !days.length;
+  $('btn-preview').disabled = !days.length;
+  $('btn-frames-zip').disabled = !days.length;
 }
 
 async function previewVideo() {
-  const frames = await videoFrames();
+  const frames = await framesForBuild();
   if (!frames.length) return;
   $('video-result').classList.add('hidden');
   $('video-canvas').classList.remove('hidden');
@@ -575,7 +723,7 @@ async function previewVideo() {
 }
 
 async function renderVideo() {
-  const frames = await videoFrames();
+  const frames = await framesForBuild();
   if (!frames.length) return;
   if (!videoSupported()) {
     toast('Этот браузер не умеет записывать видео — выгрузите кадры в ZIP');
@@ -601,7 +749,7 @@ async function renderVideo() {
 }
 
 async function framesToZip() {
-  const frames = await videoFrames();
+  const frames = await framesForBuild();
   if (!frames.length) return;
   progressOpen('Пакую кадры');
   const files = frames.map((f, i) => ({
@@ -692,25 +840,48 @@ async function renderMore() {
   const est = await storageEstimate();
   const persisted = navigator.storage && navigator.storage.persisted
     ? await navigator.storage.persisted() : false;
-  $('storage-status').textContent = est
+  // Снимков на телефоне обычно меньше, чем дней: они качаются по требованию.
+  const cached = await blobs.count();
+  const bodies = total
+    ? ` Снимков на телефоне ${cached} из ${total} — остальные лежат в папке ` +
+      'и подтянутся, когда понадобятся.'
+    : '';
+  $('storage-status').textContent = (est
     ? `Занято ${formatBytes(est.usage)} из ${formatBytes(est.quota)}. ` +
       (persisted ? 'Данные защищены от автоочистки.' : 'Защита от автоочистки не включена.')
-    : 'Браузер не сообщает объём хранилища.';
+    : 'Браузер не сообщает объём хранилища.') + bodies;
   $('btn-persist').disabled = persisted;
 }
 
+/**
+ * Пересобирает всё производное после смены композиции кадра.
+ *
+ * Дни, снимков которых на телефоне нет, пересобирать не из чего — у них просто
+ * выбрасывается миниатюра, и она приедет из Диска уже по новым правилам.
+ */
 async function rebuildAll() {
   const dates = await entries.allDates();
+  const opts = { size: state.cfg.videoSize, target: targetFromCfg(state.cfg) };
   progressOpen('Пересобираю кадры');
   for (let i = 0; i < dates.length; i++) {
-    const e = await entries.get(dates[i]);
-    if (e && e.photo) {
-      await refreshAligned(e);
-      await entries.put(e);
+    const date = dates[i];
+    const entry = await entries.get(date);
+    const body = await blobs.get(date);
+    if (entry && body && body.photo) {
+      const d = await deriveFrom(body.photo, entry.eyes, opts);
+      await blobs.put({ date, photo: body.photo, aligned: d.aligned });
+      entry.thumb = d.thumb;
+      entry.thumbFrom = 'master';
+      await entries.put(entry);
+    } else if (entry && entry.thumb) {
+      entry.thumb = null;
+      entry.thumbFrom = null;
+      await entries.put(entry);
     }
     progressSet(i + 1, dates.length);
   }
   progressClose();
+  freeUrls();
   toast('Кадры пересобраны');
 }
 
@@ -882,7 +1053,6 @@ function bind() {
     toast('Сохранено');
   };
 
-
   $('set-size').oninput = e => { $('size-label').textContent = e.target.value; };
   $('set-size').onchange = async e => {
     await settings.set('videoSize', Number(e.target.value));
@@ -965,15 +1135,30 @@ function bind() {
   };
 
   $('btn-export').onclick = async () => {
-    const total = await entries.count();
-    if (!total) { toast('Пока нечего выгружать'); return; }
+    const dates = await entries.allDates();
+    if (!dates.length) { toast('Пока нечего выгружать'); return; }
+    try {
+      // Архив — это оригиналы, поэтому перед выгрузкой их приходится собрать
+      // на телефоне. Второе и последнее место, где это оправдано.
+      const missing = await store.missingBodies(dates);
+      if (missing.length && canPull()) {
+        progressOpen('Загружаю снимки');
+        await store.ensureBodies(drive(), dates,
+          { onProgress: (d, t, label) => progressSet(d, t, label) });
+      }
+    } catch (e) {
+      toast(e.message || 'Не все снимки удалось загрузить');
+    }
     progressOpen('Собираю архив');
     try {
-      const zip = await exportArchive((d, t, label) => progressSet(d, t, label));
+      const { zip, skipped } = await exportArchive((d, t, label) => progressSet(d, t, label));
       progressClose();
       const name = `${state.cfg.babyName || 'archive'}-${D.todayKey()}.zip`;
       const how = await saveBlob(zip, name);
-      if (how === 'downloaded') toast('Архив сохранён в «Загрузки»');
+      if (skipped) {
+        toast(`В архиве нет ${skipped} ${D.plural(skipped, 'дня', 'дней', 'дней')}: ` +
+          'эти снимки не удалось забрать из папки', 4200);
+      } else if (how === 'downloaded') toast('Архив сохранён в «Загрузки»');
       state.cfg = await settings.all();
       await renderMore();
     } catch (e) {
@@ -1069,8 +1254,9 @@ async function boot() {
 
   requestPersistence().catch(() => {});
 
-  // Сразу после настройки история тянется на виду, с прогрессом: человек должен
-  // попасть в заполненное приложение, а не в пустое, которое молча догружается.
+  // Сразу после настройки опись тянется на виду, с прогрессом: человек должен
+  // попасть в заполненный календарь, а не в пустой, который молча догружается.
+  // Стоит это одного запроса — снимки приедут потом и поодиночке.
   if (justSetUp && configured() && state.cfg.driveEmail) await runSync();
   else syncQuietly();
 

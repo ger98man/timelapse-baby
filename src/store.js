@@ -8,14 +8,27 @@
 //
 // Поэтому здесь нет ни очереди отложенных изменений, ни разрешения конфликтов,
 // ни вопроса «чья версия новее». Спорить не с чем: Диск всегда прав.
+//
+// Кэш наполняется в два приёма, и это второе важное решение файла.
+// Обновление тянет только опись папки — id, время правки, разметку глаз, — а
+// это один запрос на всю историю и ноль мегабайт. Снимки качаются позже и
+// поштучно: когда открыли день, когда собирают таймлапс. Календарю хватает
+// миниатюр, которые Google уже сделал сам, — килобайты вместо мегабайт.
 
-import { entries, settings } from './db.js';
+import { entries, blobs, settings } from './db.js';
 import { toMaster } from './img.js';
-import { buildDerived } from './align.js';
+import { deriveFrom, thumbFrom } from './align.js';
 import { TAG } from './drive.js';
 import { pullProfile } from './profile.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
+
+/**
+ * Ссылки на миниатюры Диска. Живут пару часов и меняются с каждой описью,
+ * поэтому в базе им делать нечего: там они только перезаписывали бы карточки
+ * ради строки, которая всё равно протухнет.
+ */
+const thumbLinks = new Map();
 
 // Разметка глаз принадлежит снимку, поэтому едет в его же метаданных
 export function eyesToProp(eyes) {
@@ -27,6 +40,11 @@ export function eyesFromProp(str) {
   const n = String(str).split(',').map(Number);
   if (n.length !== 4 || n.some(Number.isNaN)) return null;
   return { lx: n[0], ly: n[1], rx: n[2], ry: n[3] };
+}
+
+function sameEyes(a, b) {
+  if (!a || !b) return !a === !b;
+  return ['lx', 'ly', 'rx', 'ry'].every(k => Math.abs(a[k] - b[k]) < 1e-6);
 }
 
 /** Файлы папки → карта «день → снимок и комментарий». */
@@ -47,38 +65,6 @@ function indexRemote(files) {
   return byDay;
 }
 
-/** Совпадает ли кэш с тем, что сейчас в папке. */
-function isFresh(cached, slot) {
-  if (!cached || !slot.photo) return false;
-  if (cached.fileId !== slot.photo.id) return false;
-  if (cached.modifiedTime !== slot.photo.modifiedTime) return false;
-  const noteId = slot.note ? slot.note.id : null;
-  const noteMod = slot.note ? slot.note.modifiedTime : null;
-  return (cached.noteId || null) === noteId && (cached.noteModified || null) === noteMod;
-}
-
-async function cacheDay(drive, day, slot, cfg) {
-  const raw = await drive.download(slot.photo.id);
-  const { blob, w, h } = await toMaster(raw, cfg.masterMaxDim, cfg.masterQuality);
-
-  const entry = {
-    date: day,
-    fileId: slot.photo.id,
-    modifiedTime: slot.photo.modifiedTime,
-    photo: blob, w, h,
-    eyes: eyesFromProp(slot.photo.appProperties && slot.photo.appProperties.eyes),
-    comment: '',
-    noteId: slot.note ? slot.note.id : null,
-    noteModified: slot.note ? slot.note.modifiedTime : null,
-  };
-  if (slot.note) {
-    entry.comment = (await (await drive.download(slot.note.id)).text()).trim();
-  }
-  await buildDerived(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
-  await entries.put(entry);
-  return entry;
-}
-
 /** Папку нашли и запомнили — всё остальное отсчитывается от неё. */
 export async function ensureFolder(drive) {
   const cfg = await settings.all();
@@ -88,8 +74,12 @@ export async function ensureFolder(drive) {
 }
 
 /**
- * Подтягивает папку в кэш. Единственное направление: Диск → телефон.
+ * Подтягивает опись папки в кэш. Единственное направление: Диск → телефон.
  * Обратного нет, потому что правки уходят в папку сразу, а не копятся.
+ *
+ * Снимки здесь не качаются. Обновление стоит одного запроса независимо от
+ * того, сколько лет уже снято, и потому его не страшно делать при каждом
+ * запуске и на мобильном интернете.
  */
 export async function refresh(drive, { onProgress = () => {} } = {}) {
   onProgress(0, 1, 'Ищу папку');
@@ -105,23 +95,215 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
   // Чего в папке нет — того нет и у нас. Кэш не хранит ничего своего.
   let dropped = 0;
   for (const day of await entries.allDates()) {
-    if (!remote.has(day)) { await entries.delete(day); dropped++; }
+    if (!remote.has(day)) { await entries.delete(day); await blobs.delete(day); dropped++; }
+  }
+  for (const day of await blobs.allDates()) {
+    if (!remote.has(day)) await blobs.delete(day);   // тело без карточки — мусор
   }
 
   const days = [...remote.keys()].sort();
-  let loaded = 0;
+  let added = 0, changed = 0;
+
   for (let i = 0; i < days.length; i++) {
     const day = days[i];
     const slot = remote.get(day);
-    onProgress(i + 1, days.length, 'Загружаю дни');
+    onProgress(i + 1, days.length, 'Читаю опись папки');
     if (!slot.photo) continue;
-    if (isFresh(await entries.get(day), slot)) continue;
-    await cacheDay(drive, day, slot, cfg);
-    loaded++;
+
+    thumbLinks.set(day, slot.photo.thumbnailLink || null);
+
+    const cached = await entries.get(day);
+    const noteId = slot.note ? slot.note.id : null;
+    const noteModified = slot.note ? slot.note.modifiedTime : null;
+    const md5 = slot.photo.md5Checksum || null;
+    const sameFile = Boolean(cached) && cached.fileId === slot.photo.id;
+    const untouched = sameFile && cached.modifiedTime === slot.photo.modifiedTime;
+    // Время правки меняется и от разметки глаз — она лежит в метаданных того же
+    // файла. Качать из-за этого мегабайты незачем, поэтому «тот же ли это
+    // снимок» решает контрольная сумма, а время правки остаётся признаком
+    // «что-то в файле изменилось».
+    const contentSame = sameFile &&
+      (md5 && cached.md5 ? cached.md5 === md5 : untouched);
+    const noteSame = Boolean(cached) &&
+      (cached.noteId || null) === noteId && (cached.noteModified || null) === noteModified;
+    const eyes = eyesFromProp(slot.photo.appProperties && slot.photo.appProperties.eyes);
+    const eyesSame = Boolean(cached) && sameEyes(cached.eyes, eyes);
+
+    if (untouched && noteSame && eyesSame) continue;
+
+    const entry = {
+      date: day,
+      fileId: slot.photo.id,
+      modifiedTime: slot.photo.modifiedTime,
+      md5,
+      noteId,
+      noteModified,
+      eyes,
+      // Комментарий лежит отдельным файлом, и качать его ради одной строки при
+      // каждой описи — та же жадность, что и качать снимки. Показываем старую
+      // копию и помечаем, что она отстала: подтянется вместе со снимком.
+      comment: cached ? (cached.comment || '') : '',
+      noteStale: Boolean(noteId) && !noteSame,
+      w: contentSame ? cached.w : 0,
+      h: contentSame ? cached.h : 0,
+      thumb: contentSame ? cached.thumb : null,
+      thumbFrom: contentSame ? cached.thumbFrom : null,
+    };
+
+    if (!contentSame) {
+      await blobs.delete(day);           // снимок другой — тело устарело целиком
+      if (cached) changed++; else added++;
+    } else if (!eyesSame) {
+      // Разметку поправили с другого телефона: пересобрать можно на месте,
+      // если снимок уже здесь, иначе миниатюра приедет заново из Диска.
+      const body = await blobs.get(day);
+      if (body && body.photo) {
+        const d = await deriveFrom(body.photo, eyes,
+          { size: cfg.videoSize, target: cfg.eyeTarget });
+        await blobs.put({ date: day, photo: body.photo, aligned: d.aligned });
+        entry.thumb = d.thumb;
+        entry.thumbFrom = 'master';
+      } else {
+        entry.thumb = null;
+        entry.thumbFrom = null;
+      }
+      changed++;
+    } else {
+      changed++;
+    }
+
+    await entries.put(entry);
   }
 
   await settings.set('lastSyncAt', Date.now());
-  return { loaded, dropped, days: days.length, rootId };
+  return { added, changed, dropped, days: days.length, rootId };
+}
+
+/**
+ * Миниатюра для календаря. Берётся у Google готовой: она приезжает ссылкой
+ * вместе с описью, весит килобайты и не требует качать оригинал.
+ *
+ * Если миниатюры нет (Диск ещё не успел её сделать, нет сети, ссылка протухла),
+ * день всё равно остаётся в календаре — просто отмеченным галочкой.
+ */
+export async function ensureThumb(drive, date, { cfg = null, size = 400 } = {}) {
+  const entry = await entries.get(date);
+  if (!entry || !entry.fileId || entry.thumb) return entry;
+
+  let link = thumbLinks.get(date);
+  if (link === undefined) {
+    link = await drive.thumbLink(entry.fileId);
+    thumbLinks.set(date, link);
+  }
+  if (!link) return entry;
+
+  let raw;
+  try {
+    raw = await drive.downloadThumb(link, size);
+  } catch {
+    // Ссылка живёт пару часов; протухла — спросим новую и попробуем ещё раз.
+    link = await drive.thumbLink(entry.fileId);
+    thumbLinks.set(date, link);
+    if (!link) return entry;
+    raw = await drive.downloadThumb(link, size);
+  }
+  if (!raw) return entry;
+
+  const conf = cfg || await settings.all();
+  entry.thumb = await thumbFrom(raw, entry.eyes, conf.eyeTarget);
+  entry.thumbFrom = 'drive';
+  await entries.put(entry);
+  return entry;
+}
+
+/**
+ * Комментарий — единственное, что дешевле дотянуть отдельно от снимка: это
+ * несколько сотен байт, и ради них незачем ждать мегабайты.
+ */
+export async function ensureNote(drive, date) {
+  const entry = await entries.get(date);
+  if (!entry || !entry.noteStale) return entry;
+  entry.comment = entry.noteId
+    ? (await (await drive.download(entry.noteId)).text()).trim()
+    : '';
+  entry.noteStale = false;
+  await entries.put(entry);
+  return entry;
+}
+
+/**
+ * Тело дня: мастер-кадр, выровненный кадр, свежий комментарий. Это и есть
+ * дорогая часть, поэтому качается ровно тогда, когда её собрались показать
+ * или отправить в видео.
+ */
+export async function ensureBody(drive, date, { cfg = null } = {}) {
+  const conf = cfg || await settings.all();
+  const entry = await entries.get(date);
+  if (!entry || !entry.fileId) return null;
+
+  let body = await blobs.get(date);
+  let dirty = false;
+
+  if (!body || !body.photo) {
+    const raw = await drive.download(entry.fileId);
+    const { blob, w, h } = await toMaster(raw, conf.masterMaxDim, conf.masterQuality);
+    body = { date, photo: blob, aligned: null };
+    entry.w = w; entry.h = h;
+    dirty = true;
+  }
+
+  if (!body.aligned || !entry.thumb || entry.thumbFrom !== 'master') {
+    const d = await deriveFrom(body.photo, entry.eyes,
+      { size: conf.videoSize, target: conf.eyeTarget });
+    body.aligned = d.aligned;
+    entry.thumb = d.thumb;
+    entry.thumbFrom = 'master';
+    dirty = true;
+  }
+
+  if (entry.noteStale) {
+    entry.comment = entry.noteId
+      ? (await (await drive.download(entry.noteId)).text()).trim()
+      : '';
+    entry.noteStale = false;
+    dirty = true;
+  }
+
+  if (dirty) {
+    await blobs.put(body);
+    await entries.put(entry);
+  }
+  return { entry, body };
+}
+
+/** Каких дней ещё нет целиком — чтобы сказать, сколько придётся качать. */
+export async function missingBodies(dates) {
+  const have = new Set(await blobs.allDates());
+  const out = [];
+  for (const date of dates) {
+    if (have.has(date)) continue;
+    const entry = await entries.get(date);
+    if (entry && entry.fileId) out.push(date);
+  }
+  return out;
+}
+
+/** Тела пачкой — для таймлапса и для выгрузки архива. */
+export async function ensureBodies(drive, dates, { onProgress = () => {} } = {}) {
+  const cfg = await settings.all();
+  const todo = await missingBodies(dates);
+  let loaded = 0, failed = 0;
+  for (let i = 0; i < todo.length; i++) {
+    onProgress(i, todo.length, 'Загружаю кадры');
+    try {
+      await ensureBody(drive, todo[i], { cfg });
+      loaded++;
+    } catch {
+      failed++;      // один недокачанный день не должен ронять всю сборку
+    }
+  }
+  onProgress(todo.length, todo.length, 'Загружаю кадры');
+  return { loaded, failed, total: todo.length };
 }
 
 /** Кладёт снимок за день. Сначала папка, потом кэш. */
@@ -138,17 +320,23 @@ export async function putPhoto(drive, date, file) {
     props: { eyes: '' },        // снимок другой — старая разметка к нему не относится
   });
 
+  const derived = await deriveFrom(blob, null, { size: cfg.videoSize, target: cfg.eyeTarget });
   const entry = {
     date,
     fileId: res.id,
     modifiedTime: res.modifiedTime,
-    photo: blob, w, h,
+    md5: res.md5Checksum || null,
     eyes: null,
     comment: was ? was.comment || '' : '',
     noteId: was ? was.noteId || null : null,
     noteModified: was ? was.noteModified || null : null,
+    noteStale: false,
+    w, h,
+    thumb: derived.thumb,
+    thumbFrom: 'master',
   };
-  await buildDerived(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
+  thumbLinks.delete(date);
+  await blobs.put({ date, photo: blob, aligned: derived.aligned });
   await entries.put(entry);
   return entry;
 }
@@ -159,14 +347,24 @@ export async function putEyes(drive, date, eyes) {
   const entry = await entries.get(date);
   if (!entry || !entry.fileId) throw new Error('Сначала нужен снимок за этот день');
 
+  // Размечают всегда по мастер-кадру, так что он уже здесь; но если день
+  // размечают сразу после чужой съёмки — доберём.
+  const loaded = await ensureBody(drive, date, { cfg });
+
   const res = await drive.updateProps(entry.fileId, {
     [TAG]: '1', kind: 'photo', day: date, eyes: eyesToProp(eyes),
   });
-  entry.eyes = eyes;
-  entry.modifiedTime = res.modifiedTime;
-  await buildDerived(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
-  await entries.put(entry);
-  return entry;
+
+  const fresh = loaded ? loaded.entry : entry;
+  fresh.eyes = eyes;
+  fresh.modifiedTime = res.modifiedTime;
+  const derived = await deriveFrom(loaded.body.photo, eyes,
+    { size: cfg.videoSize, target: cfg.eyeTarget });
+  fresh.thumb = derived.thumb;
+  fresh.thumbFrom = 'master';
+  await blobs.put({ date, photo: loaded.body.photo, aligned: derived.aligned });
+  await entries.put(fresh);
+  return fresh;
 }
 
 /** Комментарий — отдельный текстовый файл рядом со снимком. */
@@ -191,6 +389,7 @@ export async function putComment(drive, date, text) {
     entry.noteModified = res.modifiedTime;
   }
   entry.comment = value;
+  entry.noteStale = false;
   await entries.put(entry);
   return entry;
 }
@@ -204,4 +403,6 @@ export async function removeDay(drive, date) {
     }
   }
   await entries.delete(date);
+  await blobs.delete(date);
+  thumbLinks.delete(date);
 }

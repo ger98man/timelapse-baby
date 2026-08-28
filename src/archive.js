@@ -5,7 +5,7 @@
 // удобная оболочка поверх такой папки. Если через десять лет от кода ничего не
 // останется, архив всё равно откроется чем угодно.
 
-import { entries, settings } from './db.js';
+import { entries, blobs, settings } from './db.js';
 import { createZip, readZip } from './zip.js';
 import * as store from './store.js';
 
@@ -54,21 +54,37 @@ function parseCsv(text) {
   return rows;
 }
 
-/** @returns {Promise<Blob>} */
+/**
+ * Собирает архив из того, что лежит на телефоне целиком.
+ *
+ * Снимки качаются по требованию, поэтому дни без тела сюда просто не попадут —
+ * их число возвращается отдельно, чтобы человеку не пришлось догадываться,
+ * почему в архиве меньше файлов, чем дней в календаре.
+ *
+ * @returns {Promise<{zip: Blob, days: number, skipped: number}>}
+ */
 export async function exportArchive(onProgress) {
   const dates = await entries.allDates();
   const cfg = await settings.all();
   const files = [];
   const csv = [['date', 'comment', 'eye_lx', 'eye_ly', 'eye_rx', 'eye_ry'].join(',')];
+  let packed = 0, skipped = 0;
 
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     const e = await entries.get(date);
     if (!e) continue;
+    const body = await blobs.get(date);
     const [y, m] = date.split('-');
-    files.push({ name: `${y}/${m}/${date}.jpg`, data: e.photo, date: new Date(e.createdAt) });
+    const stamp = new Date(e.modifiedTime || date);
+    if (body && body.photo) {
+      files.push({ name: `${y}/${m}/${date}.jpg`, data: body.photo, date: stamp });
+      packed++;
+    } else {
+      skipped++;      // снимок ещё не скачан на этот телефон
+    }
     if (e.comment && e.comment.trim()) {
-      files.push({ name: `${y}/${m}/${date}.txt`, data: e.comment, date: new Date(e.updatedAt) });
+      files.push({ name: `${y}/${m}/${date}.txt`, data: e.comment, date: stamp });
     }
     const ey = e.eyes;
     csv.push([date, csvEscape(e.comment || ''),
@@ -88,13 +104,13 @@ export async function exportArchive(onProgress) {
     days: dates.length,
   };
 
-  files.push({ name: 'index.csv', data: '﻿' + csv.join('\n') + '\n' });
+  files.push({ name: 'index.csv', data: '\ufeff' + csv.join('\n') + '\n' });
   files.push({ name: 'settings.json', data: JSON.stringify(meta, null, 2) });
   files.push({ name: 'README.txt', data: README });
 
   const zip = await createZip(files, (d, t) => onProgress && onProgress(d, t, 'Пакую архив'));
   await settings.set('lastExportAt', Date.now());
-  return zip;
+  return { zip, days: packed, skipped };
 }
 
 const DATE_RE = /(\d{4}-\d{2}-\d{2})\.(jpg|jpeg|png|txt)$/i;

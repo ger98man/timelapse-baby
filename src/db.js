@@ -1,9 +1,18 @@
 // Хранилище. Единственное место, которое знает про IndexedDB.
 // Всё остальное приложение работает через эти функции, поэтому подменить
 // хранилище (на сервер, на CloudKit) можно не трогая остальной код.
+//
+// Кэш разложен на два уровня, и это главное решение файла:
+//
+//   entries — лёгкая карточка дня: чьи файлы в папке, разметка глаз,
+//             комментарий и квадратная миниатюра. Десятки килобайт.
+//   blobs   — тяжёлое тело дня: мастер-кадр и выровненный кадр. Сотни.
+//
+// Календарю нужен только первый уровень, поэтому листать месяцы можно, не
+// разбудив ни одного мегабайта: показывать нечего дороже миниатюры.
 
 export const DB_NAME = 'timelapse-baby';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -11,10 +20,19 @@ function open() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = event => {
       const db = req.result;
+      // Кэш выбрасываемый, поэтому при смене раскладки его проще стереть, чем
+      // переносить: индекс вернётся из папки одним запросом. Настройки живут
+      // отдельно и переживают любую такую чистку.
+      if (event.oldVersion < 2 && db.objectStoreNames.contains('entries')) {
+        db.deleteObjectStore('entries');
+      }
       if (!db.objectStoreNames.contains('entries')) {
         db.createObjectStore('entries', { keyPath: 'date' });
+      }
+      if (!db.objectStoreNames.contains('blobs')) {
+        db.createObjectStore('blobs', { keyPath: 'date' });
       }
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
@@ -48,19 +66,24 @@ function run(storeName, mode, fn) {
 }
 
 /**
- * День в кэше. Своей правды не хранит: всё здесь — копия того, что лежит в
- * папке на Диске, и может быть стёрто и перекачано без потерь.
+ * Карточка дня — лёгкий уровень кэша. Своей правды не хранит: всё здесь копия
+ * того, что лежит в папке на Диске, и может быть стёрто и перекачано без
+ * потерь.
  *
  * @typedef {Object} Entry
  * @property {string} date          'YYYY-MM-DD' — ключ
  * @property {string} fileId        id снимка в папке
  * @property {string} modifiedTime  время правки снимка в папке — по нему видно,
- *                                  не устарела ли копия
+ *                                  что в файле что-то менялось
+ * @property {?string} md5           контрольная сумма снимка: по ней видно,
+ *                                  сменилось ли само изображение, а не только
+ *                                  разметка в его метаданных
  * @property {?string} noteId       id файла с комментарием, если он есть
  * @property {?string} noteModified время правки комментария
- * @property {Blob}   photo         мастер-кадр (jpeg)
- * @property {Blob}   thumb         квадратная миниатюра для календаря
- * @property {Blob}   aligned       выровненный кадр для видео
+ * @property {boolean} noteStale    комментарий в папке новее нашей копии
+ * @property {?string} thumbLink    короткоживущая ссылка на миниатюру Диска
+ * @property {?Blob}  thumb         квадратная миниатюра для календаря (~15 КБ)
+ * @property {?string} thumbFrom    'drive' — из миниатюры Диска, 'master' — своя
  * @property {number} w
  * @property {number} h
  * @property {string} comment
@@ -91,7 +114,7 @@ export const entries = {
     return run('entries', 'readonly', s => s.getAllKeys());
   },
 
-  /** Записи за период включительно. */
+  /** Карточки за период включительно. Тел здесь нет — только миниатюры. */
   range(fromDate, toDate) {
     return run('entries', 'readonly', s =>
       s.getAll(IDBKeyRange.bound(fromDate, toDate)));
@@ -101,6 +124,50 @@ export const entries = {
     return run('entries', 'readonly', s => s.count());
   },
 };
+
+/**
+ * Тело дня — тяжёлый уровень кэша: мастер-кадр и выровненный кадр.
+ * Нужно только тому, кто смотрит сам снимок или собирает видео, поэтому
+ * качается по требованию и в любой момент может быть выброшено.
+ *
+ * @typedef {Object} Body
+ * @property {string} date
+ * @property {Blob} photo      мастер-кадр (jpeg)
+ * @property {Blob} aligned    выровненный кадр для видео
+ */
+
+export const blobs = {
+  get(date) {
+    return run('blobs', 'readonly', s => s.get(date));
+  },
+
+  put(body) {
+    return run('blobs', 'readwrite', s => s.put(body));
+  },
+
+  delete(date) {
+    return run('blobs', 'readwrite', s => s.delete(date));
+  },
+
+  clear() {
+    return run('blobs', 'readwrite', s => s.clear());
+  },
+
+  /** Какие дни уже лежат тут целиком — по ключам, не поднимая сами блобы. */
+  allDates() {
+    return run('blobs', 'readonly', s => s.getAllKeys());
+  },
+
+  count() {
+    return run('blobs', 'readonly', s => s.count());
+  },
+};
+
+/** Выбросить весь кэш: и карточки, и тела. */
+export async function clearCache() {
+  await entries.clear();
+  await blobs.clear();
+}
 
 const DEFAULT_SETTINGS = {
   babyName: '',

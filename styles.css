@@ -244,6 +244,13 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 .cal-cell.has-photo .num { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 .cal-cell.has-photo { color: #fff; }
+/* День снят, но миниатюра ещё не приехала: галочка честнее пустой клетки
+   и не стоит ни байта трафика. */
+.cal-cell.no-thumb::after {
+  content: '✓'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 17px; line-height: 1; color: var(--accent); opacity: .85;
+}
+.cal-cell.no-thumb .num { color: var(--num); text-shadow: none; }
 .cal-cell.is-today { border-color: var(--accent); }
 .cal-cell.future { opacity: .35; }
 .cal-stats { text-align: center; color: var(--muted); font-size: 13px; margin: 18px 20px 0; }
