@@ -123,46 +123,6 @@ function faceOf(entry) {
   return entry.eyes && entry.aligned ? entry.aligned : entry.photo;
 }
 
-// --- блокировка -------------------------------------------------------------
-
-const b64 = {
-  from: bytes => btoa(String.fromCharCode(...bytes)),
-  to: s => Uint8Array.from(atob(s), c => c.charCodeAt(0)),
-};
-
-async function hashCode(code, saltB64) {
-  const salt = saltB64 ? b64.to(saltB64) : crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' }, key, 256);
-  return { hash: b64.from(new Uint8Array(bits)), salt: b64.from(salt) };
-}
-
-function askCode() {
-  return new Promise(resolve => {
-    const lock = $('lock'), input = $('lock-input'), err = $('lock-error');
-    lock.classList.remove('hidden');
-    input.value = '';
-    err.textContent = '';
-    setTimeout(() => input.focus(), 250);
-
-    const submit = async () => {
-      const { hash } = await hashCode(input.value, state.cfg.lockSalt);
-      if (hash === state.cfg.lockHash) {
-        lock.classList.add('hidden');
-        resolve();
-      } else {
-        err.textContent = 'Не тот код';
-        input.value = '';
-        input.focus();
-      }
-    };
-    $('lock-submit').onclick = submit;
-    input.onkeydown = e => { if (e.key === 'Enter') submit(); };
-  });
-}
-
 // --- Google -----------------------------------------------------------------
 
 /** Диск создаётся лениво: без интернета и без токена он и не нужен. */
@@ -895,22 +855,6 @@ function bind() {
   $('set-eyed').onchange = onEye;
   $('btn-rebuild').onclick = rebuildAll;
 
-  $('btn-save-code').onclick = async () => {
-    const code = $('set-code').value.trim();
-    if (!code) {
-      await settings.merge({ lockHash: null, lockSalt: null });
-      toast('Блокировка выключена');
-    } else if (code.length < 4) {
-      toast('Минимум 4 цифры'); return;
-    } else {
-      const { hash, salt } = await hashCode(code);
-      await settings.merge({ lockHash: hash, lockSalt: salt });
-      toast('Код сохранён');
-    }
-    $('set-code').value = '';
-    state.cfg = await settings.all();
-  };
-
   // Google
   $('btn-wizard').onclick = async () => {
     await runOnboarding({ onToast: toast });
@@ -1054,8 +998,6 @@ async function boot() {
   }
 
   state.cfg = await settings.all();
-
-  if (state.cfg.lockHash) await askCode();
 
   // Настройка проходится один раз. Дальше приложение открывается офлайн:
   // иначе оно не работало бы там, где чаще всего и снимают, — в самолёте,

@@ -170,18 +170,6 @@
   </div>
 </div>
 
-<!-- Экран блокировки -->
-<div id="lock" class="cover hidden">
-  <div class="cover-inner">
-    <div class="lock-mark"></div>
-    <h1 class="cover-title">Код</h1>
-    <input id="lock-input" class="code-input" type="password" inputmode="numeric"
-           autocomplete="off" maxlength="8" placeholder="••••">
-    <p id="lock-error" class="error"></p>
-    <button id="lock-submit" class="btn btn-primary">Открыть</button>
-  </div>
-</div>
-
 <!-- Приложение -->
 <main id="app" class="hidden">
 
@@ -337,12 +325,11 @@
 
       <div class="card">
         <h2>Приватность</h2>
-        <p class="hint">Фотографии не покидают этот телефон: ни сервера, ни
-          аналитики, ни облачных сервисов распознавания. Код блокировки закрывает
-          приложение от случайных рук — это не шифрование.</p>
-        <label class="field"><span>Код (4–8 цифр, пусто — без блокировки)</span>
-          <input id="set-code" type="password" inputmode="numeric" maxlength="8" autocomplete="off"></label>
-        <button id="btn-save-code" class="btn full">Сохранить код</button>
+        <p class="hint">Своего сервера у приложения нет: ни аналитики, ни
+          облачного распознавания лиц. Фотографии лежат в вашем Google Диске,
+          и доступ к ним даёт только ваш аккаунт. От чужих рук телефон защищает
+          Face ID, а не приложение, — своего замка мы намеренно не заводим,
+          чтобы он не создавал ложного чувства защищённости.</p>
         <p class="hint"><a class="link" href="privacy.html" target="_blank" rel="noopener">Политика
           конфиденциальности</a> — что именно приложение делает с данными.</p>
       </div>
