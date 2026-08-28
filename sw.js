@@ -37,6 +37,8 @@ const SHELL = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
+  './icons/pattern-girl.svg',
+  './icons/pattern-boy.svg',
 ];
 
 // Адреса оболочки в разрешённом виде. Кэшируем только их: иначе каждый заход с

@@ -16,6 +16,7 @@ export const PROFILE_KEYS = [
   'babyName',
   'birthDate',
   'dueDate',
+  'theme',
   'eyeTarget',
   'videoSize',
   'videoFps',

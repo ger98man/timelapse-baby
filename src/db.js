@@ -106,6 +106,7 @@ const DEFAULT_SETTINGS = {
   babyName: '',
   birthDate: null,      // 'YYYY-MM-DD' — день рождения (может быть в будущем: пролог)
   dueDate: null,        // 'YYYY-MM-DD' — ПДР, чтобы считать недели беременности
+  theme: 'default',     // оформление: 'default' | 'girl' | 'boy'
   masterMaxDim: 2560,   // до какого размера ужимается фото при импорте
   masterQuality: 0.92,
   eyeTarget: { lx: 0.375, ly: 0.42, rx: 0.625, ry: 0.42 },

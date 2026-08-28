@@ -146,6 +146,7 @@ async function runSync() {
     if (res.dropped) parts.push(`удалено: ${res.dropped}`);
     toast(parts.length ? parts.join(', ') : 'Всё уже на месте');
     state.cfg = await settings.all();
+    applyTheme(state.cfg.theme);
     freeUrls();
     await renderToday();
     await renderMore();
@@ -187,7 +188,8 @@ function applyOnlineState() {
 function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
   if (!navigator.onLine) return;
-  store.refresh(drive()).then(() => settings.all().then(c => { state.cfg = c; }))
+  store.refresh(drive())
+    .then(() => settings.all().then(c => { state.cfg = c; applyTheme(c.theme); }))
     .catch(() => { /* обновится при следующей возможности */ });
 }
 
@@ -619,9 +621,44 @@ async function framesToZip() {
 
 // --- настройки --------------------------------------------------------------
 
+const THEMES = ['default', 'girl', 'boy'];
+
+/**
+ * Оформление. Настоящее значение — в настройках, а значит и в config.json
+ * рядом с фотографиями: второй родитель видит то же самое. В localStorage
+ * кладём только слепок имени — по нему index.html красит экран до того, как
+ * ответит база, иначе розовое приложение открывалось бы тёмной вспышкой.
+ */
+function applyTheme(name) {
+  const theme = THEMES.includes(name) ? name : 'default';
+  const root = document.documentElement;
+  if (theme === 'default') delete root.dataset.theme;
+  else root.dataset.theme = theme;
+
+  // Цвета не повторяем — спрашиваем у темы, которую только что включили.
+  const css = getComputedStyle(root);
+  const meta = (which, value) => {
+    const el = document.querySelector(`meta[name="${which}"]`);
+    if (el && value) el.content = value.trim();
+  };
+  meta('theme-color', css.getPropertyValue('--bg'));
+  // Полоску состояния iOS перечитывает только при запуске: на открытом
+  // приложении она сменится в следующий раз, и это не беда.
+  meta('apple-mobile-web-app-status-bar-style', css.getPropertyValue('--status-bar'));
+
+  try { localStorage.setItem('theme', theme); } catch { /* приватный режим */ }
+}
+
 function eyeTargetFrom(yPct, dPct) {
   const y = yPct / 100, d = dPct / 100;
   return { lx: 0.5 - d / 2, ly: y, rx: 0.5 + d / 2, ry: y };
+}
+
+function renderThemeCard() {
+  const active = THEMES.includes(state.cfg.theme) ? state.cfg.theme : 'default';
+  for (const btn of $('set-theme').querySelectorAll('.theme-opt')) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.theme === active));
+  }
 }
 
 async function renderMore() {
@@ -630,6 +667,7 @@ async function renderMore() {
   $('set-name').value = cfg.babyName || '';
   $('set-birth').value = cfg.birthDate || '';
   $('set-due').value = cfg.dueDate || '';
+  renderThemeCard();
   $('set-size').value = cfg.videoSize;
   $('size-label').textContent = cfg.videoSize;
 
@@ -834,6 +872,17 @@ function bind() {
   saveField('set-birth', 'birthDate');
   saveField('set-due', 'dueDate');
 
+  $('set-theme').onclick = async e => {
+    const btn = e.target.closest('.theme-opt');
+    if (!btn) return;
+    applyTheme(btn.dataset.theme);
+    await settings.set('theme', btn.dataset.theme);
+    await saveShared();
+    renderThemeCard();
+    toast('Сохранено');
+  };
+
+
   $('set-size').oninput = e => { $('size-label').textContent = e.target.value; };
   $('set-size').onchange = async e => {
     await settings.set('videoSize', Number(e.target.value));
@@ -857,6 +906,7 @@ function bind() {
   $('btn-wizard').onclick = async () => {
     await runOnboarding({ onToast: toast });
     state.cfg = await settings.all();
+    applyTheme(state.cfg.theme);
     freeUrls();
     await renderMore();
     await renderToday();
@@ -996,6 +1046,7 @@ async function boot() {
   }
 
   state.cfg = await settings.all();
+  applyTheme(state.cfg.theme);
 
   // Настройка проходится один раз. Дальше приложение открывается офлайн:
   // иначе оно не работало бы там, где чаще всего и снимают, — в самолёте,
@@ -1004,6 +1055,7 @@ async function boot() {
   if (!state.cfg.onboardingDone || !state.cfg.birthDate) {
     await runOnboarding({ onToast: toast });
     state.cfg = await settings.all();
+    applyTheme(state.cfg.theme);
     justSetUp = true;
   }
 

@@ -13,6 +13,26 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="TimelapseBaby">
 <link rel="stylesheet" href="styles.css">
+<script>
+// Оформление известно до первой отрисовки. Настоящее значение лежит в базе,
+// рядом с остальными настройками, но база отвечает не сразу, а красить надо
+// сейчас — поэтому app.js держит здесь же, в localStorage, слепок имени темы.
+// Скрипт стоит после таблицы стилей намеренно: браузер её уже дождался, и
+// цвета темы можно не повторять руками, а спросить у самой темы.
+(function () {
+  var name;
+  try { name = localStorage.getItem('theme'); } catch (e) { /* приватный режим */ }
+  if (!name || name === 'default') return;
+  document.documentElement.dataset.theme = name;
+  var css = getComputedStyle(document.documentElement);
+  var meta = function (which, value) {
+    var el = document.querySelector('meta[name="' + which + '"]');
+    if (el && value) el.content = value.trim();
+  };
+  meta('theme-color', css.getPropertyValue('--bg'));
+  meta('apple-mobile-web-app-status-bar-style', css.getPropertyValue('--status-bar'));
+})();
+</script>
 </head>
 <body>
 
@@ -304,6 +324,24 @@
         <label class="field"><span>Имя</span><input id="set-name" type="text"></label>
         <label class="field"><span>Дата рождения</span><input id="set-birth" type="date"></label>
         <label class="field"><span>ПДР (для недель беременности)</span><input id="set-due" type="date"></label>
+      </div>
+
+      <div class="card">
+        <h2>Оформление</h2>
+        <div class="themes" id="set-theme">
+          <button class="theme-opt" data-theme="default" aria-pressed="true">
+            <span class="swatch swatch-plain"></span>Обычное
+          </button>
+          <button class="theme-opt" data-theme="girl" aria-pressed="false">
+            <span class="swatch swatch-girl"></span>Для девочки
+          </button>
+          <button class="theme-opt" data-theme="boy" aria-pressed="false">
+            <span class="swatch swatch-boy"></span>Для мальчика
+          </button>
+        </div>
+        <p class="hint">Тема общая: она лежит в config.json рядом с фотографиями,
+          поэтому у второго родителя приложение выглядит так же. Цвет полоски
+          состояния на айфоне обновится при следующем запуске.</p>
       </div>
 
       <div class="card">
