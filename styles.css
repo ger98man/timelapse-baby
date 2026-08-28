@@ -290,6 +290,18 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: var(--accent); border-radius: 50%;
 }
 
+.ask-box {
+  margin: auto; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 20px; width: min(360px, 88vw);
+}
+.ask-box h2 {
+  color: var(--text); text-transform: none; letter-spacing: -0.01em;
+  font-size: 17px; margin: 0 0 8px;
+}
+.ask-box .hint { margin: 0; }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:active { background: #A9503E; }
+
 .progress-box {
   margin: auto; background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 22px; width: min(320px, 84vw); text-align: center;

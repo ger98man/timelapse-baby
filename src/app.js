@@ -44,6 +44,35 @@ function toast(text, ms = 2600) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
 }
 
+/**
+ * Свой диалог подтверждения вместо системного confirm().
+ *
+ * Системный ненадёжен: встроенные панели браузеров гасят его молча, а Chrome
+ * после «блокировать диалоги на этой странице» навсегда возвращает «нет» —
+ * и кнопка выглядит сломанной, хотя код отработал.
+ */
+function ask({ title, text = '', yes = 'Удалить', no = 'Отмена', danger = true }) {
+  return new Promise(resolve => {
+    const box = $('ask');
+    $('ask-title').textContent = title;
+    $('ask-text').textContent = text;
+    $('ask-text').classList.toggle('hidden', !text);
+    $('ask-yes').textContent = yes;
+    $('ask-yes').classList.toggle('btn-danger', danger);
+    $('ask-no').textContent = no;
+    box.classList.remove('hidden');
+
+    const close = answer => {
+      box.classList.add('hidden');
+      $('ask-yes').onclick = $('ask-no').onclick = box.onclick = null;
+      resolve(answer);
+    };
+    $('ask-yes').onclick = () => close(true);
+    $('ask-no').onclick = () => close(false);
+    box.onclick = e => { if (e.target === box) close(false); };
+  });
+}
+
 function progressOpen(label) {
   $('progress-label').textContent = label;
   $('progress-fill').style.width = '0%';
@@ -723,7 +752,12 @@ function bind() {
   bindAlignStage();
 
   const removeDay = async key => {
-    if (!confirm('Удалить этот день? Фото и комментарий пропадут.')) return;
+    const ok = await ask({
+      title: 'Удалить этот день?',
+      text: 'Фотография и комментарий пропадут с телефона. ' +
+            'В папке на Диске файл останется.',
+    });
+    if (!ok) return;
 
     // Гасим всё, что может дописать комментарий обратно: отложенные сохранения
     // и то, что делает закрытие карточки. Иначе только что удалённый день
@@ -861,7 +895,13 @@ function bind() {
   };
 
   $('btn-google-off').onclick = async () => {
-    if (!confirm('Отключить Google? Фото и комментарии останутся на телефоне и в папке Диска.')) return;
+    const ok = await ask({
+      title: 'Отключить Google?',
+      text: 'Фотографии и комментарии останутся и на телефоне, и в папке Диска. ' +
+            'Синхронизация просто остановится.',
+      yes: 'Отключить',
+    });
+    if (!ok) return;
     await G.revoke();
     await settings.merge({ driveEmail: null });
     state.cfg = await settings.all();
@@ -926,10 +966,12 @@ function bind() {
 async function maybeReset() {
   if (!new URLSearchParams(location.search).has('reset')) return false;
   const total = await entries.count();
-  const ok = confirm(
-    `Стереть всё на этом устройстве и пройти настройку заново?\n\n` +
-    `Дней в приложении: ${total}. На Google Диске всё останется — ` +
-    `после нового входа они вернутся оттуда.`);
+  const ok = await ask({
+    title: 'Стереть всё на этом устройстве?',
+    text: `Дней в приложении: ${total}. На Google Диске всё останется — ` +
+          'после нового входа они вернутся оттуда.',
+    yes: 'Стереть',
+  });
   if (!ok) {
     history.replaceState(null, '', location.pathname);
     return false;
