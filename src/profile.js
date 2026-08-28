@@ -103,14 +103,27 @@ export async function syncProfile(drive, rootId, remoteFiles) {
   return { applied: false, pushed: false, profile: local };
 }
 
-/** Читает профиль до всякой синхронизации — нужен онбордингу сразу после входа. */
-export async function fetchProfile(drive) {
-  const files = await drive.listDayFiles();
-  const file = findConfigFile(files);
+/**
+ * Читает профиль до всякой синхронизации — нужен онбордингу сразу после входа.
+ * Список файлов можно передать снаружи, чтобы не запрашивать его дважды.
+ */
+export async function fetchProfile(drive, files = null) {
+  const list = files || await drive.listDayFiles();
+  const file = findConfigFile(list);
   if (!file) return null;
   try {
     return JSON.parse(await (await drive.download(file.id)).text());
   } catch {
     return null;
   }
+}
+
+/** Сколько дней уже лежит в папке — чтобы сказать об этом человеку сразу. */
+export function countRemoteDays(files) {
+  const days = new Set();
+  for (const f of files) {
+    const p = f.appProperties;
+    if (p && p.day && (p.kind === 'photo' || !p.kind)) days.add(p.day);
+  }
+  return days.size;
 }

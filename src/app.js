@@ -1,7 +1,7 @@
 import { entries, settings, requestPersistence, storageEstimate, DB_NAME } from './db.js';
 import * as D from './dates.js';
-import { toMaster, makeThumb, formatBytes } from './img.js';
-import { renderAlignedBlob } from './align.js';
+import { toMaster, formatBytes } from './img.js';
+import { buildDerived } from './align.js';
 import { buildVideo, playFrames, videoSupported } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { createZip } from './zip.js';
@@ -78,14 +78,20 @@ async function saveBlob(blob, filename) {
 
 function targetFromCfg(cfg) { return cfg.eyeTarget; }
 
-/** Пересобирает выровненный кадр для записи и сохраняет её. */
-async function refreshAligned(entry) {
-  if (!entry.photo) { entry.aligned = null; return entry; }
-  entry.aligned = await renderAlignedBlob(entry, {
+/** Пересобирает выровненный кадр и миниатюру записи. */
+function refreshAligned(entry) {
+  return buildDerived(entry, {
     size: state.cfg.videoSize,
     target: targetFromCfg(state.cfg),
   });
-  return entry;
+}
+
+/**
+ * Что показывать человеку. С отмеченными глазами — выровненный кадр: на экране
+ * должно быть ровно то, что попадёт в таймлапс.
+ */
+function faceOf(entry) {
+  return entry.eyes && entry.aligned ? entry.aligned : entry.photo;
 }
 
 // --- блокировка -------------------------------------------------------------
@@ -235,12 +241,12 @@ async function renderToday() {
 
   if (entry && entry.photo) {
     const img = document.createElement('img');
-    img.src = url(entry.photo);
+    img.src = url(faceOf(entry));
     img.alt = '';
     slot.appendChild(img);
     const badge = document.createElement('div');
     badge.className = 'badge';
-    badge.textContent = entry.eyes ? 'глаза отмечены' : 'глаза не отмечены';
+    badge.textContent = entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
     slot.appendChild(badge);
     $('today-actions').classList.remove('hidden');
     $('btn-camera-label').textContent = 'Переснять';
@@ -278,19 +284,18 @@ async function handlePhotoFile(file, dateKey) {
   progressOpen('Обрабатываю снимок');
   try {
     const { blob, w, h } = await toMaster(file, state.cfg.masterMaxDim, state.cfg.masterQuality);
-    progressSet(1, 3);
-    const thumb = await makeThumb(blob);
-    progressSet(2, 3);
+    progressSet(1, 2);
     const existing = await entries.get(dateKey);
     const entry = {
       date: dateKey,
-      photo: blob, w, h, thumb,
+      photo: blob, w, h,
       comment: existing ? (existing.comment || '') : '',
       eyes: null,                      // фото другое — старая разметка не годится
       createdAt: existing ? existing.createdAt : Date.now(),
+      photoAt: Date.now(),             // когда сменился сам снимок, а не запись
     };
     await refreshAligned(entry);
-    progressSet(3, 3);
+    progressSet(2, 2);
     await entries.put(entry);
   } catch (e) {
     toast(e.message || 'Не получилось прочитать фото');
@@ -376,12 +381,12 @@ async function openDay(key) {
 
   if (entry && entry.photo) {
     const img = document.createElement('img');
-    img.src = url(entry.photo);
+    img.src = url(faceOf(entry));
     img.alt = '';
     slot.appendChild(img);
     const badge = document.createElement('div');
     badge.className = 'badge';
-    badge.textContent = entry.eyes ? 'глаза отмечены' : 'глаза не отмечены';
+    badge.textContent = entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
     slot.appendChild(badge);
     $('day-align').classList.remove('hidden');
     $('day-replace').classList.remove('hidden');
@@ -946,9 +951,11 @@ async function boot() {
   // Настройка проходится один раз. Дальше приложение открывается офлайн:
   // иначе оно не работало бы там, где чаще всего и снимают, — в самолёте,
   // в роддоме, на даче без связи.
+  let justSetUp = false;
   if (!state.cfg.onboardingDone || !state.cfg.birthDate) {
     await runOnboarding({ onToast: toast });
     state.cfg = await settings.all();
+    justSetUp = true;
   }
 
   const now = new Date();
@@ -960,7 +967,12 @@ async function boot() {
   await showScreen('today');
 
   requestPersistence().catch(() => {});
-  syncQuietly();
+
+  // Сразу после настройки история тянется на виду, с прогрессом: человек должен
+  // попасть в заполненное приложение, а не в пустое, которое молча догружается.
+  if (justSetUp && configured() && state.cfg.driveEmail) await runSync();
+  else syncQuietly();
+
   window.addEventListener('online', syncQuietly);
 }
 

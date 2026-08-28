@@ -1,4 +1,4 @@
-import { loadImage, makeCanvas, canvasToBlob } from './img.js';
+import { loadImage, makeCanvas, canvasToBlob, makeThumb } from './img.js';
 
 // Выравнивание по глазам — то, что отличает таймлапс от дёргающегося слайдшоу.
 // Считаем similarity-трансформацию (поворот + масштаб + сдвиг), которая ставит
@@ -76,4 +76,23 @@ export async function renderAlignedBlob(entry, { size = 1080, target = DEFAULT_T
   } finally {
     release();
   }
+}
+
+/**
+ * Пересоздаёт всё, что выводится из мастер-кадра: выровненный кадр и миниатюру.
+ *
+ * Миниатюра берётся из выровненного кадра, если глаза отмечены. Иначе в
+ * календаре и на «Сегодня» человек видел бы центральный кроп, а в таймлапс
+ * уезжало бы совсем другое — и разметка выглядела бы бесполезной, пока не
+ * соберёшь видео.
+ */
+export async function buildDerived(entry, { size = 1080, target = DEFAULT_TARGET } = {}) {
+  if (!entry.photo) {
+    entry.aligned = null;
+    entry.thumb = null;
+    return entry;
+  }
+  entry.aligned = await renderAlignedBlob(entry, { size, target });
+  entry.thumb = await makeThumb(entry.eyes ? entry.aligned : entry.photo);
+  return entry;
 }

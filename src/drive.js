@@ -129,8 +129,8 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
    * такой лежит прямо в корне папки.
    * @param {{rootId, dateKey, name, blob, mime, kind, fileId?}} opts
    */
-  async function putDayFile({ rootId, dateKey, name, blob, mime, kind, fileId }) {
-    const meta = { name, appProperties: { [TAG]: '1', kind } };
+  async function putDayFile({ rootId, dateKey, name, blob, mime, kind, fileId, props }) {
+    const meta = { name, appProperties: { [TAG]: '1', kind, ...(props || {}) } };
     if (dateKey) meta.appProperties.day = dateKey;
     if (!fileId) {
       meta.parents = [dateKey ? await folderForDay(rootId, dateKey) : rootId];
@@ -149,6 +149,19 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
       `appProperties has { key='${TAG}' and value='1' }`,
       'trashed=false',
     ]));
+  }
+
+  /**
+   * Правит только метаданные, не трогая содержимое. Нужно, когда меняется
+   * разметка глаз: сам снимок при этом остался прежним, и перезаливать
+   * мегабайты ради тридцати байт было бы расточительно.
+   */
+  async function updateProps(fileId, props) {
+    return call(`${API}/files/${fileId}?fields=id,modifiedTime`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appProperties: props }),
+    });
   }
 
   async function download(fileId) {
@@ -181,7 +194,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   }
 
   return {
-    ensureRoot, adoptRoot, folderForDay, putDayFile,
+    ensureRoot, adoptRoot, folderForDay, putDayFile, updateProps,
     listDayFiles, download, trash, folderLink,
   };
 }

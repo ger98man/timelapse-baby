@@ -10,11 +10,27 @@
 // всё; приложение показывает победителя.
 
 import { entries, settings } from './db.js';
-import { toMaster, makeThumb } from './img.js';
-import { renderAlignedBlob } from './align.js';
+import { toMaster } from './img.js';
+import { buildDerived } from './align.js';
 import { syncProfile } from './profile.js';
+import { TAG } from './drive.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
+
+// Разметка глаз едет в appProperties самого снимка — она к нему и относится.
+// Так она переживает переустановку, приезжает на второй телефон вместе с фото
+// и не теряется, даже если локальную базу стереть.
+function eyesToProp(eyes) {
+  if (!eyes) return '';
+  return [eyes.lx, eyes.ly, eyes.rx, eyes.ry].map(n => n.toFixed(5)).join(',');
+}
+
+function eyesFromProp(str) {
+  if (!str) return null;
+  const n = str.split(',').map(Number);
+  if (n.length !== 4 || n.some(Number.isNaN)) return null;
+  return { lx: n[0], ly: n[1], rx: n[2], ry: n[3] };
+}
 
 function groupRemote(files) {
   const byDay = new Map();
@@ -86,20 +102,19 @@ export async function sync(drive, { onProgress = () => {}, signal } = {}) {
 
       const raw = await drive.download(remote.photo.id);
       const { blob, w, h } = await toMaster(raw, cfgNow.masterMaxDim, cfgNow.masterQuality);
+      const remoteEyes = eyesFromProp(remote.photo.appProperties &&
+        remote.photo.appProperties.eyes);
       const next = {
         date: day,
         photo: blob, w, h,
-        thumb: await makeThumb(blob),
         comment: local ? local.comment || '' : '',
-        eyes: local ? local.eyes : null,
+        // разметка принадлежит снимку: приехал снимок — приехала и она
+        eyes: remoteEyes,
         createdAt: local ? local.createdAt : Date.now(),
+        photoAt: Date.now(),
         sync: { ...sy },
       };
-      // фото другое — старая разметка глаз к нему не относится
-      if (!local || !local.photo) next.eyes = null;
-      next.aligned = await renderAlignedBlob(next, {
-        size: cfgNow.videoSize, target: cfgNow.eyeTarget,
-      });
+      await buildDerived(next, { size: cfgNow.videoSize, target: cfgNow.eyeTarget });
 
       // проигравший снимок не выкидываем, а увозим в ту же папку отдельно
       if (hadOwnPhoto) {
@@ -112,6 +127,8 @@ export async function sync(drive, { onProgress = () => {}, signal } = {}) {
 
       next.sync.photoId = remote.photo.id;
       next.sync.remotePhotoModified = ts(remote.photo.modifiedTime);
+      next.sync.photoPushedAt = next.photoAt;
+      next.sync.eyesProp = eyesToProp(next.eyes);
       next.sync.pushedAt = Date.now();
       next.updatedAt = Date.now();
       await entries.put(next);
@@ -138,18 +155,33 @@ export async function sync(drive, { onProgress = () => {}, signal } = {}) {
     // --- отдать на Диск --------------------------------------------------
     if (!local) continue;
     const dirty = (local.updatedAt || 0) > ((local.sync && local.sync.pushedAt) || 0);
-    if (!dirty && remote.photo && (!local.comment || remote.note)) continue;
+    const eyesDiffer = eyesToProp(local.eyes) !== ((local.sync && local.sync.eyesProp) || '');
+    if (!dirty && !eyesDiffer && remote.photo && (!local.comment || remote.note)) continue;
 
     const s = { ...(local.sync || {}) };
+    const eyesProp = eyesToProp(local.eyes);
+    const photoIsNew = !s.photoId || (local.photoAt || 0) > (s.photoPushedAt || 0);
 
-    if (local.photo && (!s.photoId || dirty)) {
+    if (local.photo && photoIsNew) {
       const res = await drive.putDayFile({
         rootId, dateKey: day, name: `${day}.jpg`,
         blob: local.photo, mime: 'image/jpeg', kind: 'photo',
         fileId: s.photoId,
+        props: eyesProp ? { eyes: eyesProp } : undefined,
       });
       s.photoId = res.id;
       s.remotePhotoModified = ts(res.modifiedTime);
+      s.photoPushedAt = local.photoAt || Date.now();
+      s.eyesProp = eyesProp;
+      pushed++;
+    } else if (local.photo && s.photoId && eyesProp !== (s.eyesProp || '')) {
+      // Снимок прежний, изменилась только разметка — правим метаданные,
+      // а не перезаливаем мегабайты ради тридцати байт.
+      const res = await drive.updateProps(s.photoId, {
+        [TAG]: '1', kind: 'photo', day, ...(eyesProp ? { eyes: eyesProp } : { eyes: '' }),
+      });
+      s.remotePhotoModified = ts(res.modifiedTime);
+      s.eyesProp = eyesProp;
       pushed++;
     }
 

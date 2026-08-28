@@ -7,8 +7,8 @@
 
 import { entries, settings } from './db.js';
 import { createZip, readZip } from './zip.js';
-import { toMaster, makeThumb } from './img.js';
-import { renderAlignedBlob } from './align.js';
+import { toMaster } from './img.js';
+import { buildDerived } from './align.js';
 
 const README = `Ежедневные фото — архив
 =======================
@@ -159,12 +159,12 @@ export async function importArchive(blob, { replace = false } = {}, onProgress) 
     const entry = {
       date,
       photo, w, h,
-      thumb: await makeThumb(photo),
       comment: texts.get(date) || (existing ? existing.comment : '') || '',
       eyes: eyes.get(date) || (existing ? existing.eyes : null) || null,
       createdAt: existing ? existing.createdAt : Date.now(),
+      photoAt: Date.now(),
     };
-    entry.aligned = await renderAlignedBlob(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
+    await buildDerived(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
     await entries.put(entry);
     added++;
     if (onProgress) onProgress(i + 1, dates.length, 'Импортирую дни');

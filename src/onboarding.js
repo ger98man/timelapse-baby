@@ -11,7 +11,7 @@ import { GOOGLE, configured, pickerReady } from '../config.js';
 import * as G from './google.js';
 import { createDrive } from './drive.js';
 import { pickFolder } from './picker.js';
-import { fetchProfile, PROFILE_KEYS } from './profile.js';
+import { fetchProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
 import * as D from './dates.js';
 
 const $ = id => document.getElementById(id);
@@ -52,6 +52,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       signedIn: Boolean(cfg.driveEmail),
       folderId: cfg.driveFolderId,
       folderName: cfg.driveFolderName || GOOGLE.folderName,
+      remoteDays: 0,
     };
 
     // В мастере токен просим интерактивно: человек прямо сейчас у экрана и
@@ -159,9 +160,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           $('wiz-folder-link').href = `https://drive.google.com/drive/folders/${id}`;
           $('wiz-folder-ok').classList.remove('hidden');
 
-          // Настройки лежат в этой же папке. Если они там есть — спрашивать
-          // имя и дату не нужно, они уже известны.
-          const remote = await fetchProfile(drive);
+          // В этой же папке лежат и настройки, и вся история. Если они там
+          // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
+          const files = await drive.listDayFiles();
+          state.remoteDays = countRemoteDays(files);
+          const remote = await fetchProfile(drive, files);
           if (remote && remote.birthDate) {
             const patch = {};
             for (const key of PROFILE_KEYS) {
@@ -170,10 +173,15 @@ export function runOnboarding({ onToast = () => {} } = {}) {
             await settings.merge(patch);
             await settings.touchProfile(Date.parse(remote.updatedAt) || Date.now());
             dropStep('baby');
-            $('wiz-folder-text').textContent = remote.babyName
-              ? `Нашёл настройки в папке: снимаем ${remote.babyName}.`
-              : 'Нашёл в папке готовые настройки — вводить ничего не нужно.';
+            const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
+            $('wiz-folder-text').textContent = state.remoteDays
+              ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
+                'Они появятся в приложении, вводить ничего не нужно.'
+              : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
             renderChrome();
+          } else if (state.remoteDays) {
+            $('wiz-folder-text').textContent =
+              `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении.`;
           }
           setNext('Дальше', true);
         } catch (e) {
@@ -210,10 +218,12 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       async done() {
         const c = await settings.all();
         const who = c.babyName ? c.babyName : 'ребёнка';
-        $('wiz-done-text').textContent =
-          `Осталось снять первый кадр. Дальше — по одному фото ${who} в день; ` +
-          'приложение само посчитает дни и соберёт таймлапс, когда захотите.';
-        setNext('Снять первое фото');
+        $('wiz-done-text').textContent = state.remoteDays
+          ? `Загружаю ${state.remoteDays} дней из папки — календарь и таймлапс ` +
+            'будут доступны сразу, как они приедут.'
+          : `Осталось снять первый кадр. Дальше — по одному фото ${who} в день; ` +
+            'приложение само посчитает дни и соберёт таймлапс, когда захотите.';
+        setNext(state.remoteDays ? 'Загрузить снимки' : 'Снять первое фото');
         setSkip(null);
       },
     };
