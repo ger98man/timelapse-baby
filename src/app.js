@@ -195,6 +195,34 @@ async function runSync() {
   }
 }
 
+/**
+ * Любая правка уезжает прямо в общую папку, поэтому без сети её делать нельзя:
+ * иначе два телефона расходятся, и потом непонятно, чья версия настоящая.
+ * Пока Диск не подключён, приложение работает локально и это правило не нужно.
+ */
+function online() {
+  return !state.cfg.driveEmail || navigator.onLine;
+}
+
+function requireOnline() {
+  if (online()) return true;
+  toast('Нет сети. Снимите обычной камерой и добавьте кадр из галереи позже', 4200);
+  return false;
+}
+
+/** Блокирует всё, чем можно что-то изменить, пока нет сети. */
+function applyOnlineState() {
+  const can = online();
+  for (const id of ['btn-camera', 'btn-library', 'btn-align', 'btn-delete',
+                    'day-align', 'day-replace', 'day-add', 'day-delete']) {
+    const el = $(id);
+    if (el) el.disabled = !can;
+  }
+  $('today-comment').disabled = !can;
+  $('day-comment').disabled = !can;
+  $('offline-note').classList.toggle('hidden', can);
+}
+
 /** Тихая попытка после съёмки: получилось — хорошо, нет — не мешаем. */
 function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
@@ -288,6 +316,7 @@ async function renderToday() {
   }
 
   $('today-comment').value = entry ? (entry.comment || '') : '';
+  applyOnlineState();
   renderStreak();
 }
 
@@ -430,6 +459,7 @@ async function openDay(key) {
   }
 
   $('day-comment').value = entry ? (entry.comment || '') : '';
+  applyOnlineState();
   $('overlay-day').classList.remove('hidden');
 }
 
@@ -718,10 +748,15 @@ function bind() {
 
   // фото
   let pendingDate = null;
-  $('btn-camera').onclick = () => { pendingDate = D.todayKey(); $('file-camera').click(); };
-  $('btn-library').onclick = () => { pendingDate = D.todayKey(); $('file-input').click(); };
-  $('day-replace').onclick = () => { pendingDate = dayKey; $('file-input').click(); };
-  $('day-add').onclick = () => { pendingDate = dayKey; $('file-input').click(); };
+  const pick = (date, input) => () => {
+    if (!requireOnline()) return;
+    pendingDate = date();
+    $(input).click();
+  };
+  $('btn-camera').onclick = pick(D.todayKey, 'file-camera');
+  $('btn-library').onclick = pick(D.todayKey, 'file-input');
+  $('day-replace').onclick = pick(() => dayKey, 'file-input');
+  $('day-add').onclick = pick(() => dayKey, 'file-input');
 
   const onPick = async e => {
     const file = e.target.files && e.target.files[0];
@@ -744,20 +779,42 @@ function bind() {
     dayCommentTimer = setTimeout(() => saveComment(key, v), 500);
   };
 
-  $('btn-align').onclick = () => openAlign(D.todayKey());
-  $('day-align').onclick = () => openAlign(dayKey);
+  $('btn-align').onclick = () => { if (requireOnline()) openAlign(D.todayKey()); };
+  $('day-align').onclick = () => { if (requireOnline()) openAlign(dayKey); };
   $('align-close').onclick = () => { $('overlay-align').classList.add('hidden'); state.align = null; };
   $('align-reset').onclick = () => { state.align.l = null; state.align.r = null; drawDots(); };
   $('align-save').onclick = saveAlign;
   bindAlignStage();
 
   const removeDay = async key => {
+    if (!requireOnline()) return;
+    const entry = await entries.get(key);
+    const inFolder = Boolean(state.cfg.driveEmail && entry && entry.sync && entry.sync.photoId);
+
     const ok = await ask({
       title: 'Удалить этот день?',
-      text: 'Фотография и комментарий пропадут с телефона. ' +
-            'В папке на Диске файл останется.',
+      text: inFolder
+        ? 'Фотография и комментарий пропадут и с телефона, и из общей папки — ' +
+          'у всех, кто снимает вместе с вами. В корзине Диска файл полежит ещё 30 дней.'
+        : 'Фотография и комментарий пропадут с этого телефона.',
     });
     if (!ok) return;
+
+    // Сначала папка, потом телефон. Наоборот нельзя: если Диск не ответит,
+    // день исчезнет здесь и вернётся при следующей синхронизации.
+    if (inFolder) {
+      progressOpen('Удаляю из общей папки');
+      try {
+        const d = drive();
+        const ids = [entry.sync.photoId, entry.sync.noteId, ...(entry.sync.extraIds || [])];
+        for (const id of ids.filter(Boolean)) await d.trash(id);
+        progressClose();
+      } catch (e) {
+        progressClose();
+        toast(e.message || 'Не удалось удалить из папки — на телефоне тоже оставил');
+        return;
+      }
+    }
 
     // Гасим всё, что может дописать комментарий обратно: отложенные сохранения
     // и то, что делает закрытие карточки. Иначе только что удалённый день
@@ -1025,7 +1082,9 @@ async function boot() {
   if (justSetUp && configured() && state.cfg.driveEmail) await runSync();
   else syncQuietly();
 
-  window.addEventListener('online', syncQuietly);
+  window.addEventListener('online', () => { applyOnlineState(); syncQuietly(); });
+  window.addEventListener('offline', applyOnlineState);
+  applyOnlineState();
 }
 
 boot();
