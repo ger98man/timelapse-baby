@@ -724,6 +724,16 @@ function bind() {
 
   const removeDay = async key => {
     if (!confirm('Удалить этот день? Фото и комментарий пропадут.')) return;
+
+    // Гасим всё, что может дописать комментарий обратно: отложенные сохранения
+    // и то, что делает закрытие карточки. Иначе только что удалённый день
+    // воскресает записью без фотографии.
+    clearTimeout(dayCommentTimer);
+    clearTimeout(todayCommentTimer);
+    dayKey = null;
+    $('day-comment').value = '';
+    $('today-comment').value = '';
+
     await entries.delete(key);
     freeUrls();
     closeDay();
