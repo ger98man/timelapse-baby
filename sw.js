@@ -1,9 +1,10 @@
 // Оболочка кэшируется целиком, поэтому приложение открывается без сети.
 // Версию менять при каждом обновлении файлов.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = [
   './',
   './index.html',
+  './privacy.html',
   './styles.css',
   './manifest.webmanifest',
   './config.js',
