@@ -7,8 +7,7 @@
 
 import { entries, settings } from './db.js';
 import { createZip, readZip } from './zip.js';
-import { toMaster } from './img.js';
-import { buildDerived } from './align.js';
+import * as store from './store.js';
 
 const README = `Ежедневные фото — архив
 =======================
@@ -104,7 +103,7 @@ const DATE_RE = /(\d{4}-\d{2}-\d{2})\.(jpg|jpeg|png|txt)$/i;
  * Импорт архива. Существующие дни не перезаписываются, если replace = false —
  * так безопасно сливать архивы двух телефонов.
  */
-export async function importArchive(blob, { replace = false } = {}, onProgress) {
+export async function importArchive(drive, blob, { replace = false } = {}, onProgress) {
   const items = await readZip(blob);
   const cfg = await settings.all();
 
@@ -154,18 +153,12 @@ export async function importArchive(blob, { replace = false } = {}, onProgress) 
     const existing = await entries.get(date);
     if (existing && !replace) { skipped++; continue; }
 
-    const src = photos.get(date);
-    const { blob: photo, w, h } = await toMaster(src, cfg.masterMaxDim, cfg.masterQuality);
-    const entry = {
-      date,
-      photo, w, h,
-      comment: texts.get(date) || (existing ? existing.comment : '') || '',
-      eyes: eyes.get(date) || (existing ? existing.eyes : null) || null,
-      createdAt: existing ? existing.createdAt : Date.now(),
-      photoAt: Date.now(),
-    };
-    await buildDerived(entry, { size: cfg.videoSize, target: cfg.eyeTarget });
-    await entries.put(entry);
+    // Импорт — такая же правка, как съёмка: сначала папка, потом кэш.
+    await store.putPhoto(drive, date, photos.get(date));
+    const note = texts.get(date) || (existing ? existing.comment : '') || '';
+    if (note.trim()) await store.putComment(drive, date, note);
+    const mark = eyes.get(date) || (existing ? existing.eyes : null);
+    if (mark) await store.putEyes(drive, date, mark);
     added++;
     if (onProgress) onProgress(i + 1, dates.length, 'Импортирую дни');
   }

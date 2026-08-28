@@ -4,12 +4,13 @@ import { toMaster, formatBytes } from './img.js';
 import { buildDerived } from './align.js';
 import { buildVideo, playFrames, videoSupported } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
+import { pushProfile } from './profile.js';
 import { createZip } from './zip.js';
 import { GOOGLE, configured } from '../config.js';
 import { runOnboarding } from './onboarding.js';
 import * as G from './google.js';
 import { createDrive } from './drive.js';
-import { sync } from './sync.js';
+import * as store from './store.js';
 import { pickFolder } from './picker.js';
 
 const $ = id => document.getElementById(id);
@@ -130,28 +131,27 @@ function drive() {
   return createDrive({ getToken: () => G.getAccessToken({ interactive: false }) });
 }
 
-/** Синхронизация вручную — с прогрессом и внятным итогом. */
+/** Обновление из папки — с прогрессом и внятным итогом. */
 async function runSync() {
   if (!configured()) { toast('Google не настроен'); return; }
-  progressOpen('Синхронизирую');
+  progressOpen('Обновляю из папки');
   try {
     await G.getAccessToken({ interactive: true });
-    const res = await sync(drive(), {
+    const res = await store.refresh(drive(), {
       onProgress: (d, t, label) => progressSet(d, t, label),
     });
     progressClose();
     const parts = [];
-    if (res.pulled) parts.push(`получено: ${res.pulled}`);
-    if (res.pushed) parts.push(`отправлено: ${res.pushed}`);
-    if (res.conflicts) parts.push(`спорных дней: ${res.conflicts}`);
-    toast(parts.length ? parts.join(', ') : 'Всё и так совпадает');
+    if (res.loaded) parts.push(`загружено дней: ${res.loaded}`);
+    if (res.dropped) parts.push(`удалено: ${res.dropped}`);
+    toast(parts.length ? parts.join(', ') : 'Всё уже на месте');
     state.cfg = await settings.all();
     freeUrls();
     await renderToday();
     await renderMore();
   } catch (e) {
     progressClose();
-    toast(e.message || 'Синхронизация не прошла');
+    toast(e.message || 'Не удалось обновить из папки');
   }
 }
 
@@ -187,8 +187,8 @@ function applyOnlineState() {
 function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
   if (!navigator.onLine) return;
-  sync(drive()).then(() => settings.all().then(c => { state.cfg = c; }))
-    .catch(() => { /* синхронизируется при следующей возможности */ });
+  store.refresh(drive()).then(() => settings.all().then(c => { state.cfg = c; }))
+    .catch(() => { /* обновится при следующей возможности */ });
 }
 
 async function renderGoogleCard() {
@@ -277,6 +277,10 @@ async function renderToday() {
 
   $('today-comment').value = entry ? (entry.comment || '') : '';
   applyOnlineState();
+  const hasPhoto = Boolean(entry && entry.photo);
+  $('today-comment').disabled = $('today-comment').disabled || !hasPhoto;
+  $('today-comment').placeholder = hasPhoto
+    ? 'Что было сегодня…' : 'Сначала снимите кадр';
   renderStreak();
 }
 
@@ -299,31 +303,19 @@ async function renderStreak() {
 
 async function handlePhotoFile(file, dateKey) {
   if (!file) return;
-  progressOpen('Обрабатываю снимок');
+  progressOpen('Загружаю в общую папку');
   try {
-    const { blob, w, h } = await toMaster(file, state.cfg.masterMaxDim, state.cfg.masterQuality);
-    progressSet(1, 2);
-    const existing = await entries.get(dateKey);
-    const entry = {
-      date: dateKey,
-      photo: blob, w, h,
-      comment: existing ? (existing.comment || '') : '',
-      eyes: null,                      // фото другое — старая разметка не годится
-      createdAt: existing ? existing.createdAt : Date.now(),
-      photoAt: Date.now(),             // когда сменился сам снимок, а не запись
-    };
-    await refreshAligned(entry);
-    progressSet(2, 2);
-    await entries.put(entry);
+    await store.putPhoto(drive(), dateKey, file);
   } catch (e) {
-    toast(e.message || 'Не получилось прочитать фото');
-  } finally {
     progressClose();
+    toast(e.message || 'Не удалось загрузить снимок — ничего не изменилось');
+    return;
   }
+  progressClose();
   freeUrls();
   await renderToday();
   if (!$('overlay-day').classList.contains('hidden')) await openDay(dateKey);
-  syncQuietly();
+  if (!$('screen-calendar').classList.contains('hidden')) await renderCalendar();
 }
 
 // --- календарь --------------------------------------------------------------
@@ -420,6 +412,11 @@ async function openDay(key) {
 
   $('day-comment').value = entry ? (entry.comment || '') : '';
   applyOnlineState();
+  // Комментарий лежит файлом рядом со снимком, поэтому без снимка ему негде быть
+  const hasPhoto = Boolean(entry && entry.photo);
+  $('day-comment').disabled = $('day-comment').disabled || !hasPhoto;
+  $('day-comment').placeholder = hasPhoto
+    ? 'Комментарий…' : 'Сначала добавьте фото за этот день';
   $('overlay-day').classList.remove('hidden');
 }
 
@@ -431,12 +428,15 @@ function closeDay() {
 }
 
 async function saveComment(key, text) {
-  if (!key) return;
+  if (!key || !online()) return;
   const existing = await entries.get(key);
-  if (!existing && !text.trim()) return;
-  const entry = existing || { date: key, comment: '', eyes: null, createdAt: Date.now() };
-  entry.comment = text;
-  await entries.put(entry);
+  if (!existing) return;            // комментарий без снимка хранить негде
+  if ((existing.comment || '') === text) return;
+  try {
+    await store.putComment(drive(), key, text);
+  } catch (e) {
+    toast(e.message || 'Комментарий не сохранился');
+  }
 }
 
 // --- разметка глаз ----------------------------------------------------------
@@ -517,11 +517,14 @@ async function saveAlign() {
   if (!a) return;
   if (!a.l || !a.r) { toast('Нужны обе точки'); return; }
 
-  progressOpen('Пересобираю кадр');
-  const entry = await entries.get(a.key);
-  entry.eyes = { lx: a.l.x, ly: a.l.y, rx: a.r.x, ry: a.r.y };
-  await refreshAligned(entry);
-  await entries.put(entry);
+  progressOpen('Сохраняю разметку');
+  try {
+    await store.putEyes(drive(), a.key, { lx: a.l.x, ly: a.l.y, rx: a.r.x, ry: a.r.y });
+  } catch (e) {
+    progressClose();
+    toast(e.message || 'Разметка не сохранилась');
+    return;
+  }
   progressClose();
 
   $('overlay-align').classList.add('hidden');
@@ -748,44 +751,30 @@ function bind() {
 
   const removeDay = async key => {
     if (!requireOnline()) return;
-    const entry = await entries.get(key);
-    const inFolder = Boolean(state.cfg.driveEmail && entry && entry.sync && entry.sync.photoId);
-
     const ok = await ask({
       title: 'Удалить этот день?',
-      text: inFolder
-        ? 'Фотография и комментарий пропадут и с телефона, и из общей папки — ' +
-          'у всех, кто снимает вместе с вами. В корзине Диска файл полежит ещё 30 дней.'
-        : 'Фотография и комментарий пропадут с этого телефона.',
+      text: 'Снимок и комментарий пропадут из общей папки — у всех, кто снимает ' +
+            'вместе с вами. В корзине Диска файл полежит ещё 30 дней.',
     });
     if (!ok) return;
 
-    // Сначала папка, потом телефон. Наоборот нельзя: если Диск не ответит,
-    // день исчезнет здесь и вернётся при следующей синхронизации.
-    if (inFolder) {
-      progressOpen('Удаляю из общей папки');
-      try {
-        const d = drive();
-        const ids = [entry.sync.photoId, entry.sync.noteId, ...(entry.sync.extraIds || [])];
-        for (const id of ids.filter(Boolean)) await d.trash(id);
-        progressClose();
-      } catch (e) {
-        progressClose();
-        toast(e.message || 'Не удалось удалить из папки — на телефоне тоже оставил');
-        return;
-      }
-    }
-
-    // Гасим всё, что может дописать комментарий обратно: отложенные сохранения
-    // и то, что делает закрытие карточки. Иначе только что удалённый день
-    // воскресает записью без фотографии.
+    // Гасим отложенные сохранения и то, что делает закрытие карточки, — иначе
+    // только что удалённый день воскресает комментарием.
     clearTimeout(dayCommentTimer);
     clearTimeout(todayCommentTimer);
     dayKey = null;
     $('day-comment').value = '';
     $('today-comment').value = '';
 
-    await entries.delete(key);
+    progressOpen('Удаляю из общей папки');
+    try {
+      await store.removeDay(drive(), key);   // сначала папка, потом кэш
+    } catch (e) {
+      progressClose();
+      toast(e.message || 'Не удалось удалить из папки — на телефоне тоже оставил');
+      return;
+    }
+    progressClose();
     freeUrls();
     closeDay();
     await renderToday();
@@ -826,10 +815,19 @@ function bind() {
   };
 
   // настройки
+  // Общие настройки живут в config.json в папке, поэтому уезжают туда сразу —
+  // тогда второй телефон получит их при ближайшем обновлении.
+  const saveShared = async () => {
+    state.cfg = await settings.all();
+    if (!configured() || !state.cfg.driveEmail || !navigator.onLine) return;
+    try { await pushProfile(drive()); }
+    catch (e) { toast(e.message || 'Настройка сохранена только на этом телефоне'); }
+  };
+
   const saveField = (id, key, transform = v => v || null) =>
     $(id).onchange = async e => {
       await settings.set(key, transform(e.target.value));
-      state.cfg = await settings.all();
+      await saveShared();
       toast('Сохранено');
     };
   saveField('set-name', 'babyName', v => v.trim());
@@ -839,7 +837,7 @@ function bind() {
   $('set-size').oninput = e => { $('size-label').textContent = e.target.value; };
   $('set-size').onchange = async e => {
     await settings.set('videoSize', Number(e.target.value));
-    state.cfg = await settings.all();
+    await saveShared();
     $('video-canvas').width = $('video-canvas').height = 540;
   };
   const onEye = async () => {
@@ -847,7 +845,7 @@ function bind() {
     $('eyed-label').textContent = $('set-eyed').value;
     await settings.set('eyeTarget',
       eyeTargetFrom(Number($('set-eyey').value), Number($('set-eyed').value)));
-    state.cfg = await settings.all();
+    await saveShared();
   };
   $('set-eyey').oninput = () => { $('eyey-label').textContent = $('set-eyey').value; };
   $('set-eyed').oninput = () => { $('eyed-label').textContent = $('set-eyed').value; };
@@ -941,7 +939,7 @@ function bind() {
     if (!file) return;
     progressOpen('Читаю архив');
     try {
-      const res = await importArchive(file, { replace: false },
+      const res = await importArchive(drive(), file, { replace: false },
         (d, t, label) => progressSet(d, t, label));
       progressClose();
       toast(`Добавлено дней: ${res.added}` + (res.skipped ? `, пропущено: ${res.skipped}` : ''));

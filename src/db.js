@@ -48,18 +48,24 @@ function run(storeName, mode, fn) {
 }
 
 /**
- * Запись одного дня.
+ * День в кэше. Своей правды не хранит: всё здесь — копия того, что лежит в
+ * папке на Диске, и может быть стёрто и перекачано без потерь.
+ *
  * @typedef {Object} Entry
- * @property {string} date    'YYYY-MM-DD' — ключ
- * @property {Blob}   photo   мастер-кадр (jpeg)
- * @property {Blob}   thumb   квадратная миниатюра для календаря
- * @property {number} w       ширина мастер-кадра
- * @property {number} h       высота мастер-кадра
- * @property {string} comment комментарий дня
+ * @property {string} date          'YYYY-MM-DD' — ключ
+ * @property {string} fileId        id снимка в папке
+ * @property {string} modifiedTime  время правки снимка в папке — по нему видно,
+ *                                  не устарела ли копия
+ * @property {?string} noteId       id файла с комментарием, если он есть
+ * @property {?string} noteModified время правки комментария
+ * @property {Blob}   photo         мастер-кадр (jpeg)
+ * @property {Blob}   thumb         квадратная миниатюра для календаря
+ * @property {Blob}   aligned       выровненный кадр для видео
+ * @property {number} w
+ * @property {number} h
+ * @property {string} comment
  * @property {?{lx:number,ly:number,rx:number,ry:number}} eyes
- *           координаты глаз в долях от размера кадра (0..1), null если не размечено
- * @property {number} createdAt
- * @property {number} updatedAt
+ *           координаты глаз в долях от размера снимка (0..1)
  */
 
 export const entries = {
@@ -68,9 +74,12 @@ export const entries = {
   },
 
   put(entry) {
-    entry.updatedAt = Date.now();
-    if (!entry.createdAt) entry.createdAt = entry.updatedAt;
     return run('entries', 'readwrite', s => s.put(entry));
+  },
+
+  /** Выбросить кэш целиком: он всегда пересобирается из папки. */
+  clear() {
+    return run('entries', 'readwrite', s => s.clear());
   },
 
   delete(date) {
@@ -109,20 +118,11 @@ const DEFAULT_SETTINGS = {
   onboardingDone: false,
   driveFolderId: null,     // id папки приложения
   profileFileId: null,     // id config.json в этой папке
-  settingsUpdatedAt: 0,    // когда здесь последний раз меняли общие настройки
   driveFolderName: 'Каждый день',
   driveEmail: null,        // чей аккаунт подключён
   lastSyncAt: null,
   autoSync: true,          // синхронизировать сразу после съёмки
 };
-
-// Настройки, которые едут в config.json на Диске и общие для всех, кто снимает
-// одного ребёнка. Их правка помечается временем — по нему синхронизация решает,
-// чья версия свежее. Всё остальное (токены, id папки) остаётся на устройстве.
-const PROFILE_KEYS = new Set([
-  'babyName', 'birthDate', 'dueDate', 'eyeTarget',
-  'videoSize', 'videoFps', 'masterMaxDim', 'masterQuality', 'reminderHour',
-]);
 
 export const settings = {
   async all() {
@@ -137,21 +137,14 @@ export const settings = {
     return row ? row.value : DEFAULT_SETTINGS[key];
   },
 
-  async set(key, value) {
-    await run('settings', 'readwrite', s => s.put({ key, value }));
-    if (PROFILE_KEYS.has(key)) await this.touchProfile();
+  set(key, value) {
+    return run('settings', 'readwrite', s => s.put({ key, value }));
   },
 
   async merge(patch) {
     for (const [key, value] of Object.entries(patch)) {
       await this.set(key, value);
     }
-  },
-
-  /** Отметить, что общие настройки поменялись здесь и сейчас. */
-  touchProfile(at = Date.now()) {
-    return run('settings', 'readwrite', s =>
-      s.put({ key: 'settingsUpdatedAt', value: at }));
   },
 };
 

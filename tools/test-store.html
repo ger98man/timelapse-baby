@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Проверка хранилища</title>
+<style>
+  body { background:#12100E; color:#F5EFE7; font:15px/1.5 -apple-system, system-ui, sans-serif;
+         max-width:780px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:20px; letter-spacing:-.01em; }
+  p.lead { color:#9A918A; }
+  .case { border:1px solid #332E2A; border-radius:12px; padding:14px 16px; margin:12px 0;
+          background:#1C1917; }
+  .case h2 { font-size:15px; margin:0 0 8px; }
+  .ok::before  { content:'✓ '; color:#7FBF7F; }
+  .bad::before { content:'✗ '; color:#E06A55; }
+  .row { font-size:13px; color:#C9C0B8; margin:3px 0; font-family:ui-monospace, Menlo, monospace; }
+  .bad { color:#E06A55; }
+  #summary { font-size:17px; font-weight:650; padding:14px 16px; border-radius:12px; margin-top:20px; }
+  .pass { background:#1F2E1F; color:#B7E3B7; }
+  .fail { background:#2E1C19; color:#F0A99B; }
+</style>
+</head>
+<body>
+<h1>Проверка хранилища</h1>
+<p class="lead">Вместо Google Диска — заглушка в памяти. Проверяется главное
+свойство новой модели: правда живёт в папке, а локальная база — выбрасываемая
+копия. Значит, любая правка обязана доходить до папки, а всё, чего в папке нет,
+обязано исчезать с телефона.</p>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script type="module">
+import { entries, settings } from '../src/db.js';
+import * as store from '../src/store.js';
+import { pushProfile } from '../src/profile.js';
+
+const out = document.getElementById('out');
+let failures = 0;
+let box;
+
+function caseOf(title) {
+  box = document.createElement('div');
+  box.className = 'case';
+  box.innerHTML = `<h2>${title}</h2>`;
+  out.appendChild(box);
+}
+function check(label, condition, detail = '') {
+  const row = document.createElement('div');
+  row.className = 'row ' + (condition ? 'ok' : 'bad');
+  row.textContent = label + (detail ? ` — ${detail}` : '');
+  box.appendChild(row);
+  if (!condition) failures++;
+}
+
+// --- поддельная папка -------------------------------------------------------
+function fakeDrive() {
+  const files = new Map();
+  let seq = 0;
+  let clock = Date.now() - 3600000;
+  const tick = () => new Date(clock += 60000).toISOString();
+
+  return {
+    files,
+    async ensureRoot(name, known) { return known || 'root'; },
+    async adoptRoot(id) { return id; },
+    async putDayFile({ dateKey, name, blob, kind, fileId, props }) {
+      const id = fileId || 'f' + (++seq);
+      const prev = files.get(id);
+      const appProperties = {
+        ...(prev ? prev.appProperties : {}),
+        everyday: '1', kind, ...(props || {}),
+      };
+      if (dateKey) appProperties.day = dateKey;
+      const modifiedTime = tick();
+      files.set(id, { id, name, blob, modifiedTime, appProperties });
+      return { id, modifiedTime };
+    },
+    async updateProps(id, props) {
+      const f = files.get(id);
+      f.appProperties = { ...f.appProperties, ...props };
+      f.modifiedTime = tick();
+      return { id, modifiedTime: f.modifiedTime };
+    },
+    async listDayFiles() {
+      return [...files.values()].map(f => ({ ...f, appProperties: { ...f.appProperties } }));
+    },
+    async download(id) { return files.get(id).blob; },
+    async trash(id) { files.delete(id); },
+    count(kind) { return [...files.values()].filter(f => f.appProperties.kind === kind).length; },
+    dayFile(day, kind = 'photo') {
+      return [...files.values()].find(f => f.appProperties.day === day && f.appProperties.kind === kind);
+    },
+  };
+}
+
+async function jpeg(tint) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 200;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = tint; ctx.fillRect(0, 0, 200, 200);
+  ctx.fillStyle = '#000'; ctx.fillRect(50, 70, 18, 18); ctx.fillRect(132, 70, 18, 18);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+}
+
+// --- прогон -----------------------------------------------------------------
+(async () => {
+  await entries.clear();
+  await settings.merge({ driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null });
+  const drive = fakeDrive();
+
+  caseOf('Снимок уходит в папку, а не только в кэш');
+  await store.putPhoto(drive, '2026-09-10', await jpeg('#c96'));
+  await store.putPhoto(drive, '2026-09-11', await jpeg('#9c6'));
+  check('в папке два снимка', drive.count('photo') === 2, `photo=${drive.count('photo')}`);
+  check('в кэше два дня', (await entries.allDates()).length === 2);
+  const cached = await entries.get('2026-09-10');
+  check('кэш помнит файл папки', Boolean(cached.fileId && cached.modifiedTime));
+  check('выровненный кадр построен', Boolean(cached.aligned));
+  check('имя файла по дате', drive.dayFile('2026-09-10').name === '2026-09-10.jpg');
+
+  caseOf('Комментарий — отдельный файл рядом');
+  await store.putComment(drive, '2026-09-10', 'первый день дома');
+  check('файл комментария появился', drive.count('note') === 1);
+  check('текст в папке верный',
+    (await drive.dayFile('2026-09-10', 'note').blob.text()) === 'первый день дома');
+  await store.putComment(drive, '2026-09-10', '   ');
+  check('пустой комментарий удаляет файл', drive.count('note') === 0);
+  check('в кэше комментарий тоже пуст',
+    !(await entries.get('2026-09-10')).comment.trim());
+
+  caseOf('Разметка глаз правит метаданные, не снимок');
+  const sizeBefore = drive.dayFile('2026-09-11').blob.size;
+  await store.putEyes(drive, '2026-09-11', { lx: 0.41, ly: 0.38, rx: 0.59, ry: 0.40 });
+  check('координаты в метаданных', Boolean(drive.dayFile('2026-09-11').appProperties.eyes),
+    String(drive.dayFile('2026-09-11').appProperties.eyes));
+  check('снимок не перезаливали', drive.dayFile('2026-09-11').blob.size === sizeBefore);
+  check('кэш знает про разметку', Boolean((await entries.get('2026-09-11')).eyes));
+
+  caseOf('Кэш выбрасывается и собирается заново из папки');
+  await entries.clear();
+  check('кэш пуст', (await entries.allDates()).length === 0);
+  let r = await store.refresh(drive);
+  check('вернулись оба дня', (await entries.allDates()).length === 2, `loaded=${r.loaded}`);
+  const back = await entries.get('2026-09-11');
+  check('снимок на месте', back.photo && back.photo.size > 0);
+  check('разметка вернулась', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
+  check('выровненный кадр пересобран', Boolean(back.aligned));
+
+  caseOf('Повторное обновление ничего не качает');
+  r = await store.refresh(drive);
+  check('загрузок нет', r.loaded === 0, `loaded=${r.loaded}`);
+  check('удалений нет', r.dropped === 0, `dropped=${r.dropped}`);
+
+  caseOf('Удаление дня доходит до папки');
+  await store.removeDay(drive, '2026-09-10');
+  check('снимок из папки исчез', !drive.dayFile('2026-09-10'));
+  check('день исчез из кэша', !(await entries.get('2026-09-10')));
+  r = await store.refresh(drive);
+  check('и не возвращается после обновления', !(await entries.get('2026-09-10')),
+    `дней=${(await entries.allDates()).length}`);
+
+  caseOf('Чужие правки в папке доходят до телефона');
+  // как будто второй родитель снял свой день и подписал его
+  await drive.putDayFile({ rootId: 'root', dateKey: '2026-09-12', name: '2026-09-12.jpg',
+    blob: await jpeg('#69c'), kind: 'photo' });
+  await drive.putDayFile({ rootId: 'root', dateKey: '2026-09-11', name: '2026-09-11.txt',
+    blob: new Blob(['подписал со своего телефона']), kind: 'note' });
+  r = await store.refresh(drive);
+  check('новый день приехал', Boolean(await entries.get('2026-09-12')), `loaded=${r.loaded}`);
+  check('чужой комментарий приехал',
+    (await entries.get('2026-09-11')).comment === 'подписал со своего телефона',
+    JSON.stringify((await entries.get('2026-09-11')).comment));
+
+  // а теперь второй родитель удалил день у себя
+  drive.files.delete(drive.dayFile('2026-09-12').id);
+  r = await store.refresh(drive);
+  check('удалённый другим день ушёл и здесь', !(await entries.get('2026-09-12')),
+    `dropped=${r.dropped}`);
+
+  caseOf('Настройки живут в папке');
+  await settings.merge({ babyName: 'Ева', birthDate: '2026-09-01' });
+  await pushProfile(drive);
+  check('config.json появился', drive.count('config') === 1);
+  await settings.merge({ babyName: '', birthDate: null });
+  await store.refresh(drive);
+  const cfg = await settings.all();
+  check('имя вернулось из папки', cfg.babyName === 'Ева', JSON.stringify(cfg.babyName));
+  check('дата вернулась из папки', cfg.birthDate === '2026-09-01');
+  check('лишних config.json нет', drive.count('config') === 1);
+
+  await entries.clear();
+  await settings.merge({ babyName: '', birthDate: null, driveFolderId: null, profileFileId: null });
+
+  const s = document.getElementById('summary');
+  s.className = failures ? 'fail' : 'pass';
+  s.textContent = failures ? `Провалено проверок: ${failures}` : 'Все проверки прошли';
+})().catch(e => {
+  const s = document.getElementById('summary');
+  s.className = 'fail';
+  s.textContent = 'Тест упал: ' + e.message;
+  console.error(e);
+});
+</script>
+</body>
+</html>

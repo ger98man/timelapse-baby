@@ -171,7 +171,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
               if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
             }
             await settings.merge(patch);
-            await settings.touchProfile(Date.parse(remote.updatedAt) || Date.now());
             dropStep('baby');
             const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
             $('wiz-folder-text').textContent = state.remoteDays
