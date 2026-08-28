@@ -2,7 +2,7 @@
 // Всё остальное приложение работает через эти функции, поэтому подменить
 // хранилище (на сервер, на CloudKit) можно не трогая остальной код.
 
-const DB_NAME = 'sargsyan-baby';
+export const DB_NAME = 'timelapse-baby';
 const DB_VERSION = 1;
 
 let dbPromise = null;

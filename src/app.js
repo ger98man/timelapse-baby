@@ -1,4 +1,4 @@
-import { entries, settings, requestPersistence, storageEstimate } from './db.js';
+import { entries, settings, requestPersistence, storageEstimate, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { toMaster, makeThumb, formatBytes } from './img.js';
 import { renderAlignedBlob } from './align.js';
@@ -922,7 +922,7 @@ async function maybeReset() {
   G.forget();
   try { localStorage.clear(); } catch { /* приватный режим */ }
   await new Promise(resolve => {
-    const req = indexedDB.deleteDatabase('sargsyan-baby');
+    const req = indexedDB.deleteDatabase(DB_NAME);
     req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
   location.replace(location.pathname);
