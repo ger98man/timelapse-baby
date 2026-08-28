@@ -13,7 +13,7 @@ export const GOOGLE = {
   clientId: '648285324676-cugi2quf38npk0arn1qube3ks1didua3.apps.googleusercontent.com',
 
   // API key — нужен для окна выбора общей папки (второй родитель).
-  apiKey: '',
+  apiKey: 'AIzaSyAMuaYWqN5Lb0jx7nYAWCGBKaxl6wzdl3g',
 
   // Имя папки, которую приложение создаёт в Диске при первом входе.
   folderName: 'Каждый день',
