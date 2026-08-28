@@ -66,7 +66,7 @@ export async function pushProfile(drive) {
 
   const body = JSON.stringify({
     ...profile,
-    _комментарий: 'Настройки приложения «Каждый день». Фотографии лежат рядом, ' +
+    _комментарий: 'Настройки приложения «TimelapseBaby». Фотографии лежат рядом, ' +
       'по папкам года и месяца. Этот файл можно править руками.',
     updatedAt: new Date().toISOString(),
   }, null, 2);

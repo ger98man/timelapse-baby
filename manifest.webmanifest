@@ -1,6 +1,6 @@
 {
-  "name": "Каждый день",
-  "short_name": "Каждый день",
+  "name": "TimelapseBaby",
+  "short_name": "TimelapseBaby",
   "description": "Ежедневное фото, календарь и таймлапс. Всё хранится на телефоне.",
   "start_url": "./",
   "scope": "./",

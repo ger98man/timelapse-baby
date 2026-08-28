@@ -82,7 +82,7 @@ async function cacheDay(drive, day, slot, cfg) {
 /** Папку нашли и запомнили — всё остальное отсчитывается от неё. */
 export async function ensureFolder(drive) {
   const cfg = await settings.all();
-  const rootId = await drive.ensureRoot(cfg.driveFolderName || 'Каждый день', cfg.driveFolderId);
+  const rootId = await drive.ensureRoot(cfg.driveFolderName || 'TimelapseBaby', cfg.driveFolderId);
   if (rootId !== cfg.driveFolderId) await settings.set('driveFolderId', rootId);
   return rootId;
 }

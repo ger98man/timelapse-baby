@@ -118,7 +118,7 @@ const DEFAULT_SETTINGS = {
   onboardingDone: false,
   driveFolderId: null,     // id папки приложения
   profileFileId: null,     // id config.json в этой папке
-  driveFolderName: 'Каждый день',
+  driveFolderName: 'TimelapseBaby',
   driveEmail: null,        // чей аккаунт подключён
   lastSyncAt: null,
   autoSync: true,          // синхронизировать сразу после съёмки

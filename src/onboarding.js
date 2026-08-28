@@ -314,7 +314,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         'Открой в Safari и добавь на домашний экран.';
       try {
         if (navigator.share) {
-          await navigator.share({ title: 'Каждый день', text, url: location.href });
+          await navigator.share({ title: 'TimelapseBaby', text, url: location.href });
         } else if (await copy(location.href)) {
           onToast('Ссылка скопирована');
         }
