@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Каждый день</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#12100E">
+<meta name="description" content="Ежедневное фото, календарь и таймлапс — приватно, на вашем телефоне.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Каждый день">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Онбординг -->
+<div id="wizard" class="cover hidden">
+  <div class="wiz">
+    <div class="wiz-top">
+      <button id="wiz-back" class="icon-btn" aria-label="Назад">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="wiz-dots" class="wiz-dots"></div>
+      <span id="wiz-count" class="wiz-count"></span>
+    </div>
+
+    <div class="wiz-body">
+
+      <!-- 1. Приветствие -->
+      <section class="step" data-step="welcome">
+        <div class="lock-mark"></div>
+        <h1 class="cover-title">Каждый день</h1>
+        <p class="cover-sub">Одно фото в день. Календарь с комментариями.
+          Таймлапс, который собирается в любой момент.</p>
+        <ul class="facts">
+          <li>Фотографии лежат в вашем Google Диске — в папке, которую видите только вы.</li>
+          <li>Своего сервера у приложения нет. Ни базы, ни аналитики, ни распознавания лиц.</li>
+          <li>Снимать можно без интернета: телефон догонит Диск, когда появится связь.</li>
+        </ul>
+        <p class="hint">Настройка займёт минуту и делается один раз.</p>
+        <div id="wiz-not-configured" class="hidden">
+          <p class="error">В этой сборке не заполнен <b>clientId</b> в config.js,
+            поэтому вход в Google недоступен.</p>
+          <p class="hint">Это задача того, кто выкладывал приложение, а не ваша:
+            нужен один OAuth client ID на всю сборку. Инструкция — в README
+            проекта, раздел «Настройка Google».</p>
+        </div>
+      </section>
+
+      <!-- 2. Вход -->
+      <section class="step hidden" data-step="signin">
+        <h1 class="cover-title">Вход</h1>
+        <p class="cover-sub">Google спросит разрешение один раз. Приложение
+          попросит доступ только к папке, которую само создаст, — остальной Диск
+          ему не виден.</p>
+        <div id="wiz-account" class="account hidden">
+          <img id="wiz-avatar" alt="" class="avatar">
+          <div>
+            <div id="wiz-name" class="account-name"></div>
+            <div id="wiz-email" class="hint"></div>
+          </div>
+        </div>
+        <button id="wiz-signin" class="btn btn-primary full">Войти через Google</button>
+        <button id="wiz-signout" class="btn btn-quiet full hidden">Войти другим аккаунтом</button>
+        <p id="wiz-signin-error" class="error"></p>
+        <p class="hint">Если Google покажет «приложение не проверено» — это
+          нормально: проверку проходят только приложения, которые просят доступ
+          ко всему Диску. Нажмите «Дополнительно» и продолжите.</p>
+      </section>
+
+      <!-- 3. Папка -->
+      <section class="step hidden" data-step="folder">
+        <h1 class="cover-title">Папка</h1>
+        <p id="wiz-folder-text" class="cover-sub">Создаю папку в вашем Диске…</p>
+        <div id="wiz-folder-ok" class="hidden">
+          <div class="folder-card">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 7.5a1 1 0 011-1h5l2 2h9a1 1 0 011 1V18a1 1 0 01-1 1H4a1 1 0 01-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            <span id="wiz-folder-name"></span>
+          </div>
+          <a id="wiz-folder-link" class="btn full" target="_blank" rel="noopener">Открыть в Google Диске</a>
+          <p class="hint">Внутри будут обычные папки по годам и месяцам, а в них —
+            JPEG и текстовые файлы с комментариями. Их можно листать в приложении
+            Google Диск, копировать и распечатывать без нашего кода.</p>
+        </div>
+        <details class="drop" id="wiz-folder-join">
+          <summary>Я второй родитель, папка уже создана</summary>
+          <p class="hint">Пусть первый откроет папку в Диске и даст вам доступ
+            <b>на редактирование</b>. После этого выберите её здесь — и вы будете
+            снимать в один альбом.</p>
+          <button id="wiz-pick-folder" class="btn full">Выбрать общую папку</button>
+        </details>
+        <p id="wiz-folder-error" class="error"></p>
+      </section>
+
+      <!-- 4. Ребёнок -->
+      <section class="step hidden" data-step="baby">
+        <h1 class="cover-title">Про кого снимаем</h1>
+        <label class="field">
+          <span>Имя</span>
+          <input id="wiz-name" type="text" placeholder="Имя" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Дата рождения</span>
+          <input id="wiz-birth" type="date">
+        </label>
+        <p class="hint" id="wiz-birth-hint">Если ещё не родилась — поставьте
+          предполагаемую дату родов. Тогда приложение будет считать недели
+          беременности, а снимки до этой даты станут прологом таймлапса.</p>
+        <p id="wiz-baby-error" class="error"></p>
+      </section>
+
+      <!-- 5. На домашний экран -->
+      <section class="step hidden" data-step="install">
+        <h1 class="cover-title">На домашний экран</h1>
+        <p class="cover-sub">Так приложение открывается на весь экран, работает
+          без интернета и получает нормальный запас места под фотографии.</p>
+        <ol class="steps big" id="wiz-install-ios">
+          <li>Нажмите <b>Поделиться</b> внизу Safari — квадрат со стрелкой вверх.</li>
+          <li>Пролистайте и выберите <b>«На экран „Домой“»</b>.</li>
+          <li>Запускайте приложение с домашнего экрана, а не из браузера.</li>
+        </ol>
+        <ol class="steps big hidden" id="wiz-install-other">
+          <li>Откройте меню браузера.</li>
+          <li>Выберите <b>«Установить приложение»</b> или «Добавить на главный экран».</li>
+        </ol>
+        <p class="hint">Данные при установке не потеряются: это та же страница.</p>
+      </section>
+
+      <!-- 6. Второй родитель -->
+      <section class="step hidden" data-step="invite">
+        <h1 class="cover-title">Второй родитель</h1>
+        <p class="cover-sub">Чтобы снимали оба и всё складывалось в один альбом,
+          дайте второму доступ к папке и пришлите ссылку на приложение.</p>
+        <ol class="steps big">
+          <li>Откройте папку в Диске и в меню «Доступ» добавьте его почту
+            с правами <b>Редактор</b>.</li>
+          <li>Пришлите ему ссылку на приложение.</li>
+          <li>Он войдёт своим аккаунтом и на шаге «Папка» выберет «Я второй
+            родитель».</li>
+        </ol>
+        <div class="row">
+          <a id="wiz-invite-folder" class="btn grow" target="_blank" rel="noopener">Настроить доступ</a>
+          <button id="wiz-invite-share" class="btn grow">Отправить ссылку</button>
+        </div>
+        <p class="hint">Этот шаг можно пропустить и вернуться к нему в любой
+          момент — он же лежит в разделе «Ещё».</p>
+      </section>
+
+      <!-- 7. Готово -->
+      <section class="step hidden" data-step="done">
+        <div class="lock-mark"></div>
+        <h1 class="cover-title">Всё готово</h1>
+        <p class="cover-sub" id="wiz-done-text"></p>
+        <ul class="facts">
+          <li>Снимайте примерно с одного ракурса — таймлапс от этого выигрывает сильнее всего.</li>
+          <li>Пропуски — это нормально. Фото можно добавить задним числом в календаре.</li>
+          <li>Раз в пару месяцев выгружайте архив из раздела «Ещё»: одна копия — это не копия.</li>
+        </ul>
+      </section>
+
+    </div>
+
+    <div class="wiz-foot">
+      <button id="wiz-skip" class="btn btn-quiet hidden">Пропустить</button>
+      <button id="wiz-next" class="btn btn-primary grow">Дальше</button>
+    </div>
+  </div>
+</div>
+
+<!-- Экран блокировки -->
+<div id="lock" class="cover hidden">
+  <div class="cover-inner">
+    <div class="lock-mark"></div>
+    <h1 class="cover-title">Код</h1>
+    <input id="lock-input" class="code-input" type="password" inputmode="numeric"
+           autocomplete="off" maxlength="8" placeholder="••••">
+    <p id="lock-error" class="error"></p>
+    <button id="lock-submit" class="btn btn-primary">Открыть</button>
+  </div>
+</div>
+
+<!-- Приложение -->
+<main id="app" class="hidden">
+
+  <!-- Сегодня -->
+  <section id="screen-today" class="screen">
+    <header class="head">
+      <div>
+        <h1 id="today-title">Сегодня</h1>
+        <p id="today-sub" class="sub"></p>
+      </div>
+      <button id="today-prev-day" class="icon-btn" title="Другой день" aria-label="Выбрать день">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M7 3v3M17 3v3M3.5 9h17M4 6.5h16a1 1 0 011 1V20a1 1 0 01-1 1H4a1 1 0 01-1-1V7.5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+
+    <div class="today-body">
+      <div id="today-photo" class="photo-slot">
+        <div class="photo-empty">
+          <svg viewBox="0 0 24 24" width="42" height="42"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="13.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <p>Фото за этот день ещё нет</p>
+        </div>
+      </div>
+
+      <textarea id="today-comment" class="comment" rows="2"
+                placeholder="Что было сегодня…"></textarea>
+
+      <div class="row">
+        <button id="btn-camera" class="btn btn-primary grow">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13.5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span id="btn-camera-label">Снять</span>
+        </button>
+        <button id="btn-library" class="btn grow">Из галереи</button>
+      </div>
+
+      <div id="today-actions" class="row hidden">
+        <button id="btn-align" class="btn grow">Отметить глаза</button>
+        <button id="btn-delete" class="btn btn-quiet">Удалить</button>
+      </div>
+
+      <p id="streak" class="streak"></p>
+    </div>
+  </section>
+
+  <!-- Календарь -->
+  <section id="screen-calendar" class="screen hidden">
+    <header class="head">
+      <button id="cal-prev" class="icon-btn" aria-label="Предыдущий месяц">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h1 id="cal-title">Календарь</h1>
+      <button id="cal-next" class="icon-btn" aria-label="Следующий месяц">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
+    <div id="cal-weekdays" class="cal-weekdays"></div>
+    <div id="cal-grid" class="cal-grid"></div>
+    <p id="cal-stats" class="cal-stats"></p>
+  </section>
+
+  <!-- Видео -->
+  <section id="screen-video" class="screen hidden">
+    <header class="head"><h1>Таймлапс</h1></header>
+    <div class="pad">
+      <div id="video-preview" class="video-slot">
+        <canvas id="video-canvas" width="540" height="540"></canvas>
+        <video id="video-result" class="hidden" playsinline controls></video>
+      </div>
+
+      <div class="row">
+        <label class="field grow">
+          <span>С какого дня</span>
+          <input id="video-from" type="date">
+        </label>
+        <label class="field grow">
+          <span>По какой</span>
+          <input id="video-to" type="date">
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Скорость: <b id="fps-label">8</b> кадров в секунду</span>
+        <input id="video-fps" type="range" min="2" max="24" step="1" value="8">
+      </label>
+
+      <p id="video-info" class="hint"></p>
+
+      <div class="row">
+        <button id="btn-preview" class="btn grow">Посмотреть</button>
+        <button id="btn-render" class="btn btn-primary grow">Собрать видео</button>
+      </div>
+      <div class="row">
+        <button id="btn-save-video" class="btn grow hidden">Сохранить видео</button>
+        <button id="btn-frames-zip" class="btn btn-quiet grow">Выгрузить кадры</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Ещё -->
+  <section id="screen-more" class="screen hidden">
+    <header class="head"><h1>Ещё</h1></header>
+    <div class="pad">
+
+      <div class="card" id="google-card">
+        <h2>Google Диск</h2>
+        <p id="google-status" class="hint"></p>
+        <button id="btn-wizard" class="btn btn-primary full hidden">Подключить Google Диск</button>
+        <button id="btn-google-connect" class="btn btn-primary full hidden">Подключить Google</button>
+        <button id="btn-sync" class="btn btn-primary full hidden">Синхронизировать</button>
+        <a id="drive-link" class="btn full hidden" target="_blank" rel="noopener">Открыть папку в Диске</a>
+        <button id="btn-pick-folder" class="btn full hidden">Подключиться к общей папке</button>
+        <button id="btn-google-off" class="btn btn-quiet full hidden">Отключить Google</button>
+        <p class="hint" id="google-hint">Второму родителю: пусть первый откроет папку в Диске и
+          даст доступ на редактирование. Потом нажмите «Подключиться к общей
+          папке» и выберите её — дальше оба снимаете в один альбом.</p>
+      </div>
+
+      <div class="card" id="export-card">
+        <h2>Архив</h2>
+        <p id="export-status" class="hint"></p>
+        <button id="btn-export" class="btn btn-primary full">Выгрузить архив (ZIP)</button>
+        <button id="btn-import" class="btn full">Загрузить архив</button>
+        <p class="hint">В архиве обычные JPEG и текстовые файлы, разложенные по
+          годам и месяцам. Положите его в iCloud Drive или на Google Диск — это и
+          есть настоящая копия. Приложение здесь только оболочка.</p>
+      </div>
+
+      <div class="card">
+        <h2>Ребёнок</h2>
+        <label class="field"><span>Имя</span><input id="set-name" type="text"></label>
+        <label class="field"><span>Дата рождения</span><input id="set-birth" type="date"></label>
+        <label class="field"><span>ПДР (для недель беременности)</span><input id="set-due" type="date"></label>
+      </div>
+
+      <div class="card">
+        <h2>Кадр</h2>
+        <label class="field">
+          <span>Размер кадра: <b id="size-label">1080</b> px</span>
+          <input id="set-size" type="range" min="540" max="1440" step="180" value="1080">
+        </label>
+        <label class="field">
+          <span>Глаза на высоте: <b id="eyey-label">42</b>% кадра</span>
+          <input id="set-eyey" type="range" min="25" max="60" step="1" value="42">
+        </label>
+        <label class="field">
+          <span>Расстояние между глазами: <b id="eyed-label">25</b>% ширины</span>
+          <input id="set-eyed" type="range" min="12" max="45" step="1" value="25">
+        </label>
+        <button id="btn-rebuild" class="btn full">Пересобрать все кадры</button>
+      </div>
+
+      <div class="card">
+        <h2>Приватность</h2>
+        <p class="hint">Фотографии не покидают этот телефон: ни сервера, ни
+          аналитики, ни облачных сервисов распознавания. Код блокировки закрывает
+          приложение от случайных рук — это не шифрование.</p>
+        <label class="field"><span>Код (4–8 цифр, пусто — без блокировки)</span>
+          <input id="set-code" type="password" inputmode="numeric" maxlength="8" autocomplete="off"></label>
+        <button id="btn-save-code" class="btn full">Сохранить код</button>
+      </div>
+
+      <div class="card">
+        <h2>Место на телефоне</h2>
+        <p id="storage-status" class="hint"></p>
+        <button id="btn-persist" class="btn full">Защитить данные от очистки</button>
+      </div>
+
+      <p class="footer-note">Сделано вручную, специально для вас.</p>
+    </div>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab tab-active" data-screen="today">
+      <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.6V12l3 1.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <span>Сегодня</span>
+    </button>
+    <button class="tab" data-screen="calendar">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M7 3v3M17 3v3M3.5 9.5h17M4 6.5h16a1 1 0 011 1V20a1 1 0 01-1 1H4a1 1 0 01-1-1V7.5a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <span>Календарь</span>
+    </button>
+    <button class="tab" data-screen="video">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 6.5h11a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1v-9a1 1 0 011-1zM16 11l4.3-2.6a.5.5 0 01.7.4v6.4a.5.5 0 01-.7.4L16 13z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      <span>Видео</span>
+    </button>
+    <button class="tab" data-screen="more">
+      <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg>
+      <span>Ещё</span>
+    </button>
+  </nav>
+</main>
+
+<!-- Карточка дня -->
+<div id="overlay-day" class="overlay hidden">
+  <div class="sheet">
+    <header class="sheet-head">
+      <h2 id="day-title"></h2>
+      <button id="day-close" class="icon-btn" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div id="day-photo" class="photo-slot"></div>
+    <p id="day-sub" class="sub center"></p>
+    <textarea id="day-comment" class="comment" rows="3" placeholder="Комментарий…"></textarea>
+    <div class="row">
+      <button id="day-align" class="btn grow">Отметить глаза</button>
+      <button id="day-replace" class="btn grow">Заменить фото</button>
+    </div>
+    <div class="row">
+      <button id="day-add" class="btn btn-primary grow hidden">Добавить фото за этот день</button>
+      <button id="day-delete" class="btn btn-quiet grow">Удалить день</button>
+    </div>
+  </div>
+</div>
+
+<!-- Разметка глаз -->
+<div id="overlay-align" class="overlay hidden">
+  <div class="align-wrap">
+    <header class="sheet-head">
+      <h2 id="align-title">Ткните в глаза</h2>
+      <button id="align-close" class="icon-btn" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <p id="align-hint" class="hint center">Сначала правый глаз ребёнка (левый на фото), потом второй. Можно тянуть точки.</p>
+    <div id="align-stage" class="align-stage">
+      <img id="align-img" alt="">
+      <div id="align-dot-l" class="eye-dot hidden"><span>1</span></div>
+      <div id="align-dot-r" class="eye-dot hidden"><span>2</span></div>
+    </div>
+    <div class="row">
+      <button id="align-reset" class="btn grow">Сбросить</button>
+      <button id="align-save" class="btn btn-primary grow">Готово</button>
+    </div>
+  </div>
+</div>
+
+<div id="progress" class="overlay hidden">
+  <div class="progress-box">
+    <p id="progress-label">Работаю…</p>
+    <div class="bar"><div id="progress-fill"></div></div>
+    <p id="progress-count" class="hint"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<input id="file-input" type="file" accept="image/*" class="hidden-input">
+<input id="file-camera" type="file" accept="image/*" capture="environment" class="hidden-input">
+<input id="zip-input" type="file" accept=".zip,application/zip" class="hidden-input">
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>
