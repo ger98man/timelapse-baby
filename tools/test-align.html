@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Проверка выравнивания</title>
+<style>
+  body { background:#FFF7F9; color:#2B2126; font:15px/1.5 -apple-system, system-ui, sans-serif;
+         max-width:780px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:20px; letter-spacing:-.01em; }
+  p.lead { color:#7A6870; }
+  .case { border:1px solid #F0D9E1; border-radius:12px; padding:14px 16px; margin:12px 0;
+          background:#fff; }
+  .case h2 { font-size:15px; margin:0 0 8px; }
+  .ok::before  { content:'✓ '; color:#4F9E62; }
+  .bad::before { content:'✗ '; color:#C9314F; }
+  .row { font-size:13px; color:#5C4C53; margin:3px 0; font-family:ui-monospace, Menlo, monospace; }
+  .bad { color:#C9314F; }
+  #summary { font-size:17px; font-weight:650; padding:14px 16px; border-radius:12px; margin-top:20px; }
+  .pass { background:#E8F5EA; color:#2F6B3E; }
+  .fail { background:#FBE6EA; color:#93233B; }
+</style>
+</head>
+<body>
+<h1>Проверка выравнивания</h1>
+<p class="lead">Самая тонкая математика проекта: поворот, масштаб и центр, при
+которых глаза встают в назначенные точки, а кадр остаётся целиком внутри
+снимка. Второе — условие, первое — пожелание, и когда они спорят, побеждать
+обязано второе: срезанный по диагонали кадр видно сразу, а глаз, промахнувшийся
+на два пикселя, — нет.</p>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script type="module">
+import { fitTransform, DEFAULT_TARGET } from '../src/align.js';
+
+const out = document.getElementById('out');
+let failures = 0;
+let box;
+
+function caseOf(title) {
+  box = document.createElement('div');
+  box.className = 'case';
+  box.innerHTML = `<h2>${title}</h2>`;
+  out.appendChild(box);
+}
+function check(label, condition, detail = '') {
+  const row = document.createElement('div');
+  row.className = 'row ' + (condition ? 'ok' : 'bad');
+  row.textContent = label + (detail ? ` — ${detail}` : '');
+  box.appendChild(row);
+  if (!condition) failures++;
+}
+
+// --- та же арифметика, что делает канвас ------------------------------------
+// drawAligned ставит: translate(size/2) · rotate(angle) · scale · translate(-c).
+// Значит точка снимка едет в кадр вот так, а угол кадра возвращается на снимок
+// обратным ходом. Через эти две функции и проверяется всё остальное.
+
+function project(t, p, size) {
+  const dx = p.x - t.cx, dy = p.y - t.cy;
+  const c = Math.cos(t.angle), s = Math.sin(t.angle);
+  return { x: size / 2 + t.scale * (c * dx - s * dy),
+           y: size / 2 + t.scale * (s * dx + c * dy) };
+}
+
+function unproject(t, q, size) {
+  const ux = (q.x - size / 2) / t.scale, uy = (q.y - size / 2) / t.scale;
+  const c = Math.cos(-t.angle), s = Math.sin(-t.angle);
+  return { x: t.cx + (c * ux - s * uy), y: t.cy + (s * ux + c * uy) };
+}
+
+/** Лежит ли весь кадр внутри снимка — то самое «условие». */
+function coversFrame(t, iw, ih, size, slack = 0.001) {
+  const corners = [[0, 0], [size, 0], [size, size], [0, size]];
+  for (const [x, y] of corners) {
+    const p = unproject(t, { x, y }, size);
+    if (p.x < -slack || p.y < -slack || p.x > iw + slack || p.y > ih + slack) {
+      return { ok: false, at: [x, y], p };
+    }
+  }
+  return { ok: true };
+}
+
+const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
+const deg = r => r * 180 / Math.PI;
+
+// --- прогон -----------------------------------------------------------------
+(() => {
+  const SIZE = 1080;
+
+  caseOf('Выравнивать нечего — и это не ошибка');
+  check('без разметки — null', fitTransform(2000, 1500, SIZE, null) === null);
+  check('глаза в одной точке — null',
+    fitTransform(2000, 1500, SIZE, { lx: 0.5, ly: 0.5, rx: 0.5, ry: 0.5 }) === null);
+  check('глаза ближе пикселя друг к другу — тоже null',
+    fitTransform(2000, 1500, SIZE, { lx: 0.5, ly: 0.5, rx: 0.5004, ry: 0.5 }) === null);
+
+  caseOf('Ровное лицо: глаза встают ровно в цель');
+  const iw = 2000, ih = 2000;
+  const eyes = { lx: 0.42, ly: 0.45, rx: 0.58, ry: 0.45 };
+  const t = fitTransform(iw, ih, SIZE, eyes);
+  check('поворота нет', near(deg(t.angle), 0, 1e-6), `${deg(t.angle).toFixed(6)}°`);
+  const gotL = project(t, { x: eyes.lx * iw, y: eyes.ly * ih }, SIZE);
+  const gotR = project(t, { x: eyes.rx * iw, y: eyes.ry * ih }, SIZE);
+  check('левый глаз в своей точке',
+    near(gotL.x, DEFAULT_TARGET.lx * SIZE) && near(gotL.y, DEFAULT_TARGET.ly * SIZE),
+    `(${gotL.x.toFixed(1)}, ${gotL.y.toFixed(1)})`);
+  check('правый глаз в своей точке',
+    near(gotR.x, DEFAULT_TARGET.rx * SIZE) && near(gotR.y, DEFAULT_TARGET.ry * SIZE),
+    `(${gotR.x.toFixed(1)}, ${gotR.y.toFixed(1)})`);
+  check('кадр целиком внутри снимка', coversFrame(t, iw, ih, SIZE).ok);
+
+  caseOf('Наклонённая голова разворачивается ровно на свой угол');
+  for (const tilt of [-40, -15, -3, 7, 22, 45]) {
+    const a = tilt * Math.PI / 180;
+    const half = 0.08;
+    const e = {
+      lx: 0.5 - half * Math.cos(a), ly: 0.5 - half * Math.sin(a),
+      rx: 0.5 + half * Math.cos(a), ry: 0.5 + half * Math.sin(a),
+    };
+    const tr = fitTransform(2000, 2000, SIZE, e);
+    // Цель горизонтальная, значит кадр обязан повернуться ровно на -наклон.
+    check(`наклон ${tilt}° компенсирован`, near(deg(tr.angle), -tilt, 1e-6),
+      `${deg(tr.angle).toFixed(4)}°`);
+  }
+
+  caseOf('Полный кадр важнее точного попадания');
+  // Глаза широко расставлены и у самого края: точное попадание потребовало бы
+  // масштаба, при котором кадру не хватит снимка.
+  const wide = { lx: 0.06, ly: 0.5, rx: 0.94, ry: 0.5 };
+  const tw = fitTransform(1200, 900, SIZE, wide);
+  const dstDist = (DEFAULT_TARGET.rx - DEFAULT_TARGET.lx) * SIZE;
+  const srcDist = (wide.rx - wide.lx) * 1200;
+  check('масштаб поднят выше «точного»', tw.scale > dstDist / srcDist,
+    `${tw.scale.toFixed(4)} > ${(dstDist / srcDist).toFixed(4)}`);
+  check('но кадр целиком внутри снимка', coversFrame(tw, 1200, 900, SIZE).ok);
+
+  caseOf('Лицо у самого края не вытаскивает кадр за снимок');
+  for (const e of [
+    { lx: 0.02, ly: 0.03, rx: 0.14, ry: 0.03 },      // левый верхний угол
+    { lx: 0.86, ly: 0.97, rx: 0.98, ry: 0.97 },      // правый нижний
+    { lx: 0.90, ly: 0.05, rx: 0.98, ry: 0.12 },      // угол и наклон
+  ]) {
+    const te = fitTransform(1600, 1200, SIZE, e);
+    const cover = coversFrame(te, 1600, 1200, SIZE);
+    check(`глаза у края (${e.lx}, ${e.ly}) — кадр не срезан`, cover.ok,
+      cover.ok ? '' : `угол ${JSON.stringify(cover.at)} → ${JSON.stringify(cover.p)}`);
+  }
+
+  caseOf('Кадр не срезается ни при каком сочетании');
+  // Перебор вместо трёх удачно подобранных случаев: срезанный угол — та ошибка,
+  // которую замечают уже в готовом видео, когда переснять нельзя.
+  let tried = 0, broke = null;
+  for (const [w, h] of [[1200, 1600], [1600, 1200], [1000, 1000], [2560, 1440]]) {
+    for (const tilt of [-50, -25, 0, 18, 44]) {
+      for (const cx of [0.12, 0.35, 0.5, 0.72, 0.9]) {
+        for (const cy of [0.1, 0.5, 0.88]) {
+          for (const halfEye of [0.03, 0.09, 0.3]) {
+            const a = tilt * Math.PI / 180;
+            const e = {
+              lx: cx - halfEye * Math.cos(a), ly: cy - halfEye * Math.sin(a),
+              rx: cx + halfEye * Math.cos(a), ry: cy + halfEye * Math.sin(a),
+            };
+            const tt = fitTransform(w, h, SIZE, e);
+            if (!tt) continue;
+            tried++;
+            const cover = coversFrame(tt, w, h, SIZE);
+            if (!cover.ok && !broke) broke = { w, h, tilt, cx, cy, halfEye, cover };
+          }
+        }
+      }
+    }
+  }
+  check(`перебрано сочетаний: ${tried}`, tried > 500);
+  check('ни одно не срезало кадр', !broke, broke ? JSON.stringify(broke) : '');
+
+  caseOf('Своя композиция кадра тоже уважается');
+  const high = { lx: 0.3, ly: 0.3, rx: 0.7, ry: 0.3 };   // глаза выше и шире
+  const th = fitTransform(2000, 2000, SIZE, eyes, high);
+  const hL = project(th, { x: eyes.lx * 2000, y: eyes.ly * 2000 }, SIZE);
+  check('глаз встал в заданную точку, а не в стандартную',
+    near(hL.x, high.lx * SIZE) && near(hL.y, high.ly * SIZE),
+    `(${hL.x.toFixed(1)}, ${hL.y.toFixed(1)})`);
+  check('и кадр по-прежнему целый', coversFrame(th, 2000, 2000, SIZE).ok);
+
+  caseOf('Размер выходного кадра ничего не меняет по сути');
+  const small = fitTransform(2000, 2000, 320, eyes);
+  const big = fitTransform(2000, 2000, 1080, eyes);
+  check('угол один и тот же', near(small.angle, big.angle, 1e-9));
+  check('центр один и тот же', near(small.cx, big.cx, 1e-6) && near(small.cy, big.cy, 1e-6),
+    `${small.cx.toFixed(3)} / ${big.cx.toFixed(3)}`);
+  check('масштаб отличается ровно во столько же раз',
+    near(big.scale / small.scale, 1080 / 320, 1e-9),
+    (big.scale / small.scale).toFixed(6));
+
+  const s = document.getElementById('summary');
+  s.className = failures ? 'fail' : 'pass';
+  s.textContent = failures ? `Провалено проверок: ${failures}` : 'Все проверки прошли';
+})();
+</script>
+</body>
+</html>
