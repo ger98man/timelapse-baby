@@ -19,6 +19,10 @@ const $ = id => document.getElementById(id);
 // Сторона миниатюры, которую просим у Диска для показа. Столько же, сколько у
 // холста предпросмотра: одна ссылка обслуживает и карточку дня, и таймлапс.
 const THUMB_VIEW = 540;
+
+// Сторона миниатюры для клетки календаря. Клетка на телефоне около 48 точек,
+// но экран у него тройной плотности — отсюда 160, а не 48.
+const CAL_THUMB = 160;
 const state = {
   cfg: null,
   calYear: 0,
@@ -817,8 +821,8 @@ async function renderCalendar() {
     cell.dataset.date = key;
     if (key === today) cell.classList.add('is-today');
     if (key > today) cell.classList.add('future');
-    // Снимки на телефоне не хранятся, а качать по картинке на каждый день
-    // месяца — это мегабайты ради разглядывания клеток 40×40. Галочка.
+    // Сначала галочка — она не стоит ни байта и рисуется мгновенно. Миниатюра
+    // придёт следом и займёт её место, если приедет.
     if (entry && entry.fileId) cell.classList.add('has-photo', 'no-thumb');
     const num = document.createElement('span');
     num.className = 'num';
@@ -833,6 +837,65 @@ async function renderCalendar() {
   $('cal-stats').textContent =
     `${inMonth} ${D.plural(inMonth, 'день', 'дня', 'дней')} в этом месяце · ${total} всего`;
 
+  loadMonthThumbs(rows.filter(r => r.fileId).map(r => r.date));
+}
+
+/**
+ * Миниатюры открытого месяца.
+ *
+ * Единственное, что календарь вообще качает, и качает он не снимки: у Google
+ * уже есть готовые миниатюры, и ссылки на них приехали вместе с описью папки.
+ * Месяц — это три десятка картинок по несколько килобайт, ни одна из которых
+ * не ложится на диск. Платим только за те месяцы, которые открыли.
+ *
+ * Ушли на другой месяц — прошлая очередь бросается: догружать то, чего никто
+ * уже не видит, значит тратить чужой трафик впустую.
+ */
+let monthRun = 0;
+async function loadMonthThumbs(dates) {
+  const token = ++monthRun;
+  if (!dates.length || !canPull()) return;
+
+  let frames;
+  try {
+    frames = await store.previewFrames(drive(), dates, { size: CAL_THUMB });
+  } catch {
+    return;                    // не приехали — в клетках останутся галочки
+  }
+  if (token !== monthRun) return;
+
+  // Загружаем разом, а не по очереди: месяц иначе проявляется по клетке в
+  // секунду, и это заметно неприятнее, чем тридцать запросов сразу.
+  await Promise.all(frames.map(async frame => {
+    const img = new Image();
+    try {
+      await new Promise((res, rej) => {
+        img.onload = res;
+        img.onerror = () => rej(new Error('миниатюра не открылась'));
+        img.src = frame.url;
+      });
+    } catch {
+      return;                  // у этого дня останется галочка
+    }
+    if (token !== monthRun) return;
+    const cell = $('cal-grid').querySelector(`[data-date="${frame.date}"]`);
+    if (cell) paintCellThumb(cell, img, frame.eyes);
+  }));
+}
+
+/**
+ * Миниатюра в клетке: тем же расчётом, что и настоящий кадр, — в календаре
+ * видно именно то, что окажется в таймлапсе. Иначе размеченный день выглядел
+ * бы в сетке одним кадром, а в видео уезжал другим.
+ */
+function paintCellThumb(cell, img, eyes) {
+  if (cell.querySelector('canvas')) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = CAL_THUMB;
+  drawAligned(canvas.getContext('2d'), img, img.naturalWidth, img.naturalHeight,
+    CAL_THUMB, eyes, state.cfg.eyeTarget);
+  cell.classList.remove('no-thumb');
+  cell.insertBefore(canvas, cell.firstChild);
 }
 
 // --- карточка дня -----------------------------------------------------------

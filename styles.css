@@ -293,7 +293,9 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   cursor: pointer; padding: 0;
 }
 .cal-cell.empty { background: none; cursor: default; }
-.cal-cell img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cal-cell img, .cal-cell canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+}
 .cal-cell .num {
   position: relative; z-index: 1; font-size: 11px;
   color: var(--num); text-shadow: var(--num-shadow); align-self: start;
