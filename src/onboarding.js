@@ -125,8 +125,14 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       setNext(null);
     }
 
-    /** Папка есть: показать, запомнить и забрать из неё настройки. */
-    async function useFolder(root) {
+    /**
+     * Папка есть: показать, запомнить и забрать из неё настройки.
+     *
+     * @param {boolean} found найдена сама, а не заведена и не выбрана руками.
+     *        Разница важна: найденная своя пустая папка — ровно та ловушка,
+     *        из-за которой второй родитель начинает снимать в отдельный альбом.
+     */
+    async function useFolder(root, { found = false } = {}) {
       const email = await settings.get('driveEmail');
       const name = await drive.nameRoot(root, email);
 
@@ -140,6 +146,9 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       $('wiz-folder-name').textContent = name;
       $('wiz-folder-link').href = `https://drive.google.com/drive/folders/${root.id}`;
       $('wiz-folder-ok').classList.remove('hidden');
+      // Выход есть всегда, а не только когда папку не нашли: приложение могло
+      // наткнуться на старую свою папку, а человек пришёл в общую.
+      $('wiz-folder-other').classList.toggle('hidden', !pickerReady());
       setNext('Дальше', true);
 
       // В этой же папке лежат и настройки, и вся история. Если они там
@@ -163,6 +172,38 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       } else if (state.remoteDays) {
         $('wiz-folder-text').textContent =
           `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении.`;
+      } else if (found && root.ownedByMe) {
+        // Своя, пустая и найденная сама — чаще всего след прошлого захода. Если
+        // человек пришёл вторым, «Готово» здесь означало бы, что он начнёт
+        // снимать в собственный альбом рядом с общим и не заметит этого.
+        $('wiz-folder-text').textContent =
+          'Нашлась ваша собственная папка, и она пустая. Так и должно быть, ' +
+          'если альбом заводите вы.';
+        $('wiz-folder-hint').textContent =
+          'А если снимать уже начал второй родитель — подключитесь к его папке, ' +
+          'иначе вы будете снимать в разные альбомы. Папки подписаны почтой ' +
+          'владельца, так что свою и общую легко различить.';
+      }
+    }
+
+    /**
+     * Подключение к чужой папке. Одно и то же и для «я второй», и для «это не
+     * та папка», поэтому живёт одной функцией.
+     */
+    async function connectToShared() {
+      const err = $('wiz-folder-error');
+      err.textContent = '';
+      try {
+        const token = await G.getAccessToken({ interactive: true });
+        const folder = await pickFolder(token);
+        if (!folder) return;
+        // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
+        // на ней уже стоит, от владельца.
+        await drive.adoptRoot(folder.id);
+        await useFolder({ id: folder.id, name: folder.name, ownedByMe: false });
+        onToast(`Папка «${folder.name}» подключена`);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось выбрать папку';
       }
     }
 
@@ -203,7 +244,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
         try {
           const root = await drive.findRoot(state.folderId);
-          if (root) return await useFolder(root);
+          if (root) return await useFolder(root, { found: true });
           askWhoYouAre();
         } catch (e) {
           // Папку не нашли из-за сети — предлагать «завести» тут нельзя:
@@ -331,22 +372,8 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       }
     };
 
-    $('wiz-pick-folder').onclick = async () => {
-      const err = $('wiz-folder-error');
-      err.textContent = '';
-      try {
-        const token = await G.getAccessToken({ interactive: true });
-        const folder = await pickFolder(token);
-        if (!folder) return;
-        // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
-        // на ней уже стоит, от владельца.
-        await drive.adoptRoot(folder.id);
-        await useFolder({ id: folder.id, name: folder.name, ownedByMe: false });
-        onToast(`Папка «${folder.name}» подключена`);
-      } catch (e) {
-        err.textContent = e.message || 'Не удалось выбрать папку';
-      }
-    };
+    $('wiz-pick-folder').onclick = connectToShared;
+    $('wiz-folder-other').onclick = connectToShared;
 
     $('wiz-invite-share').onclick = async () => {
       const text = 'Ставь себе — сюда складываем по фото в день. ' +
