@@ -30,6 +30,7 @@ const SHELL = [
   './src/dates.js',
   './src/img.js',
   './src/align.js',
+  './src/ghost.js',
   './src/video.js',
   './src/zip.js',
   './src/archive.js',

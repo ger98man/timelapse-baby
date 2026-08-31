@@ -270,6 +270,16 @@
         <button id="btn-library" class="btn grow">Из галереи</button>
       </div>
 
+      <div class="row">
+        <button id="btn-ghost" class="btn grow">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <ellipse cx="12" cy="11" rx="5.4" ry="6.6"/>
+            <ellipse cx="12" cy="11" rx="8.4" ry="9.6" stroke-dasharray="2.6 3"/>
+          </svg>
+          <span>Снять по вчерашнему</span>
+        </button>
+      </div>
+
       <div id="today-actions" class="row hidden">
         <button id="btn-align" class="btn grow">Отметить глаза</button>
         <button id="btn-delete" class="btn btn-quiet">Удалить</button>
@@ -512,6 +522,40 @@
       <button id="align-reset" class="btn grow">Сбросить</button>
       <button id="align-save" class="btn btn-primary grow">Готово</button>
     </div>
+  </div>
+</div>
+
+<!-- Камера с призраком вчерашнего кадра. Главная причина, по которой кадры
+     сходятся: совместить голову с полупрозрачным вчера проще, чем вспомнить,
+     как именно ты держал телефон сутки назад. -->
+<div id="overlay-ghost" class="overlay overlay-full hidden">
+  <div class="ghost-wrap">
+    <header class="sheet-head">
+      <h2 id="ghost-title">Снять по вчерашнему</h2>
+      <button id="ghost-close" class="icon-btn" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+
+    <div id="ghost-stage" class="ghost-stage">
+      <video id="ghost-video" playsinline muted autoplay></video>
+      <canvas id="ghost-guide" class="ghost-guide" width="720" height="720"></canvas>
+    </div>
+
+    <p id="ghost-hint" class="hint center">Совместите голову с бледным кадром и с овалом.</p>
+
+    <label class="field">
+      <span>Вчерашний кадр: <b id="ghost-opacity-label">35</b>%</span>
+      <input id="ghost-opacity" type="range" min="0" max="70" step="5" value="35">
+    </label>
+
+    <div class="row">
+      <button id="ghost-flip" class="btn grow">Другая камера</button>
+      <button id="ghost-shoot" class="btn btn-primary grow">Снять</button>
+    </div>
+    <p class="hint">Снимает встроенная камера браузера — она проще системной:
+      без HDR и ночного режима. Если важнее качество, снимайте кнопкой «Снять»,
+      а этой — когда важнее, чтобы кадр совпал со вчерашним.</p>
   </div>
 </div>
 

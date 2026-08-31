@@ -2,6 +2,7 @@ import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { formatBytes } from './img.js';
 import { drawAligned } from './align.js';
+import { createGhostCamera, cameraError } from './ghost.js';
 import { buildVideo, videoSupported, pickMime, drawCaption } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
@@ -24,6 +25,7 @@ const state = {
   calMonth: 0,
   urls: [],          // объектные URL текущего экрана, чтобы не течь памятью
   align: null,       // контекст оверлея разметки глаз
+  ghost: null,       // живая камера, пока открыт её оверлей
   conn: { status: 'unknown', email: '', note: '' },   // связь с Google
   connAt: 0,         // когда её проверяли в последний раз
   screen: null,      // какой экран открыт — чтобы знать, с какого уходим
@@ -331,7 +333,7 @@ function requireOnline() {
 /** Блокирует всё, чем можно что-то изменить, пока нет сети. */
 function applyOnlineState() {
   const can = online();
-  for (const id of ['btn-camera', 'btn-library', 'btn-align', 'btn-delete',
+  for (const id of ['btn-camera', 'btn-library', 'btn-ghost', 'btn-align', 'btn-delete',
                     'day-align', 'day-replace', 'day-add', 'day-delete']) {
     const el = $(id);
     if (el) el.disabled = !can;
@@ -897,6 +899,105 @@ async function saveComment(key, text) {
   } catch (e) {
     toast(e.message || 'Комментарий не сохранился');
   }
+}
+
+// --- съёмка по вчерашнему кадру ---------------------------------------------
+//
+// Разметка глаз спасает от смещения на десятки пикселей. От «вчера снимал
+// сидя, сегодня стоя» она не спасает: масштаб и ракурс уже не те, и голова в
+// таймлапсе всё равно прыгает. Лечится это только в момент съёмки — тем, что
+// вчерашний кадр видно прямо в видоискателе.
+
+/**
+ * Вчерашний кадр для призрака — миниатюрой Диска, а не оригиналом.
+ *
+ * Для наложения её хватает с запасом: призрак и так бледный, и совмещают по
+ * силуэту головы, а не по ресницам. Зато открывается мгновенно и стоит
+ * килобайты — камеру не заставляют ждать мегабайт.
+ */
+async function ghostSource(beforeDate) {
+  const rows = await entries.range('0000-01-01', beforeDate);
+  const prev = [...rows].reverse().find(r => r.date !== beforeDate && r.fileId);
+  if (!prev) return null;
+
+  let link;
+  try {
+    link = await store.thumbUrl(drive(), prev.date, { size: THUMB_VIEW });
+  } catch {
+    return null;
+  }
+  if (!link) return null;
+
+  const img = new Image();
+  try {
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error('кадр не открылся'));
+      img.src = link;
+    });
+  } catch {
+    return null;
+  }
+  return { img, eyes: prev.eyes, date: prev.date };
+}
+
+async function openGhost(key) {
+  if (!requireOnline()) return;
+
+  const cam = createGhostCamera({
+    video: $('ghost-video'),
+    guide: $('ghost-guide'),
+    target: state.cfg.eyeTarget,
+  });
+  state.ghost = { cam, key };
+
+  $('ghost-title').textContent = D.dayLabel(key, state.cfg).label;
+  $('ghost-hint').textContent = 'Включаю камеру…';
+  $('overlay-ghost').classList.remove('hidden');
+
+  try {
+    await cam.start();
+  } catch (e) {
+    closeGhost();
+    toast(cameraError(e), 5200);
+    return;
+  }
+
+  cam.setAlpha(Number($('ghost-opacity').value) / 100);
+
+  const prev = await ghostSource(key);
+  if (!state.ghost) return;            // успели закрыть, пока ехала миниатюра
+  if (prev) {
+    cam.setGhost(prev.img, prev.eyes);
+    $('ghost-hint').textContent =
+      'Совместите голову с бледным кадром за ' + D.formatLong(prev.date).replace(/ \d{4}$/, '') + '.';
+  } else {
+    // Первый кадр в альбоме: совмещать не с чем, зато овал уже задаёт, как
+    // будут выглядеть все следующие.
+    $('ghost-hint').textContent = 'Первый кадр — по нему выстроятся остальные. ' +
+      'Впишите голову в овал, глаза на линию.';
+  }
+}
+
+function closeGhost() {
+  if (state.ghost) state.ghost.cam.stop();
+  state.ghost = null;
+  $('overlay-ghost').classList.add('hidden');
+}
+
+async function shootGhost() {
+  const g = state.ghost;
+  if (!g) return;
+  let file;
+  try {
+    file = await g.cam.shoot(state.cfg.masterQuality);
+  } catch (e) {
+    toast(e.message || 'Кадр не получился');
+    return;
+  }
+  const key = g.key;
+  closeGhost();                        // камеру гасим до заливки: она не нужна
+  await handlePhotoFile(file, key);
 }
 
 // --- разметка глаз ----------------------------------------------------------
@@ -1564,6 +1665,22 @@ function bind() {
     dayCommentTimer = setTimeout(() => saveComment(key, v), 500);
   };
 
+  $('btn-ghost').onclick = () => openGhost(D.todayKey());
+  $('ghost-close').onclick = closeGhost;
+  $('ghost-shoot').onclick = shootGhost;
+  $('ghost-flip').onclick = async () => {
+    if (!state.ghost) return;
+    try {
+      await state.ghost.cam.flip();
+    } catch (e) {
+      toast(cameraError(e), 4200);
+    }
+  };
+  $('ghost-opacity').oninput = e => {
+    $('ghost-opacity-label').textContent = e.target.value;
+    if (state.ghost) state.ghost.cam.setAlpha(Number(e.target.value) / 100);
+  };
+
   $('btn-align').onclick = () => { if (requireOnline()) openAlign(D.todayKey()); };
   $('day-align').onclick = () => { if (requireOnline()) openAlign(dayKey); };
   $('align-close').onclick = () => { $('overlay-align').classList.add('hidden'); state.align = null; };
@@ -1934,6 +2051,7 @@ async function boot() {
   // убить вкладку, не дав транзакции дойти. Настоящая гарантия — уборка при
   // запуске, она выше.
   window.addEventListener('pagehide', () => {
+    closeGhost();                      // камера не должна гореть в фоне
     freeUrls();
     store.clearPreview();
     blobs.clear();
