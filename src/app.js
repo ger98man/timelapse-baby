@@ -481,6 +481,20 @@ function renderConn() {
   bar.classList.toggle('has-fix', offer);
 }
 
+// Папка года внутри альбома: в окне Google легко провалиться внутрь и выбрать
+// её. Тогда «альбомом» стала бы она, а настройки и прошлые годы остались бы
+// снаружи. Имена там всегда числовые, это и ловим.
+const YEAR_FOLDER = 'Это папка года внутри альбома, а нужна папка альбома ' +
+  'целиком — та, что подписана почтой.';
+const yearFolder = name => /^\d{1,4}$/.test(String(name).trim());
+
+// Свои ошибки окно Google показывает внутри себя и наружу не отдаёт, поэтому
+// про самую частую говорим сами: догадаться про неё нельзя, а чинится она в
+// консоли за минуту.
+const PICKER_HINT =
+  'Папку не выбрали. Если вместо списка папок Google показал «The API developer ' +
+  'key is invalid» — в проекте не включён Google Picker API или ключ ограничен по сайту.';
+
 /**
  * Спрашивает, кто пришёл, и заводит либо подключает папку.
  *
@@ -520,7 +534,8 @@ async function askWhoYouAre() {
       try {
         const token = await G.getAccessToken({ interactive: true });
         const folder = await pickFolder(token);
-        if (!folder) return;
+        if (!folder) { err.textContent = PICKER_HINT; return; }
+        if (yearFolder(folder.name)) { err.textContent = YEAR_FOLDER; return; }
         await drive().adoptRoot(folder.id);
         await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
         toast(`Папка «${folder.name}» подключена`);
@@ -1959,7 +1974,8 @@ function bind() {
     try {
       const token = await G.getAccessToken({ interactive: true });
       const folder = await pickFolder(token);
-      if (!folder) return;
+      if (!folder) return toast(PICKER_HINT);
+      if (yearFolder(folder.name)) return toast(YEAR_FOLDER);
       await drive().adoptRoot(folder.id);
       await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
       state.cfg = await settings.all();

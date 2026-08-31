@@ -160,10 +160,19 @@ Google Диске. Не потому, что браузер может что-т
 6. [Создать OAuth client ID](https://console.cloud.google.com/auth/clients) типа
    *Web application*. В *Authorized JavaScript origins* перечислить адреса, откуда
    приложение открывают: боевой и `http://localhost:8787` для разработки.
-7. [API key](https://console.cloud.google.com/apis/credentials) — для окна выбора
-   общей папки (нужен, если снимать будут двое).
-8. Вписать оба значения в `config.js`. Номер проекта (`appId`) там же — он
+7. [Включить Google Picker API](https://console.cloud.google.com/apis/library/picker.googleapis.com) —
+   без него окно выбора общей папки отвечает «The API developer key is invalid».
+8. [API key](https://console.cloud.google.com/apis/credentials) — для окна выбора
+   общей папки (нужен, если снимать будут двое). Ограничения ключа должны
+   пропускать и сайт, и сам Picker: в *Application restrictions* → *Websites*
+   перечислить адреса приложения (`https://…github.io/*`, `http://localhost:8787/*`),
+   в *API restrictions* — оставить Google Picker API и Google Drive API.
+9. Вписать оба значения в `config.js`. Номер проекта (`appId`) там же — он
    выводится из Client ID сам, вписывать нужно только если проект другой.
+
+«The API developer key is invalid» в окне выбора означает ровно одно из трёх:
+Picker API не включён, ключ ограничен по сайту и адрес приложения в список не
+попал, или ключ из другого проекта, чем Client ID.
 
 Про номер проекта стоит знать, почему он вообще есть. Со скоупом `drive.file`
 доступ к чужой папке появляется у приложения ровно в момент, когда человек

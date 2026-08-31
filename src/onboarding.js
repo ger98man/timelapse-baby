@@ -265,7 +265,16 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       try {
         const token = await G.getAccessToken({ interactive: true });
         const folder = await pickFolder(token);
-        if (!folder) return;
+        if (!folder) {
+          // Окно могли закрыть, а могли и не увидеть: свои ошибки Google
+          // показывает внутри окна и наружу не отдаёт. Самая частая из них
+          // чинится в консоли за минуту, но догадаться про это нельзя.
+          err.textContent =
+            'Папку не выбрали. Если вместо списка папок Google показал ' +
+            '«The API developer key is invalid» — в проекте не включён ' +
+            'Google Picker API или ключ ограничен по сайту.';
+          return;
+        }
         // В окне Google можно провалиться внутрь альбома и выбрать папку года —
         // тогда «альбомом» стала бы она, а настройки и все прошлые годы
         // остались бы снаружи. Имена там всегда числовые, это и ловим.
