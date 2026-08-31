@@ -190,7 +190,7 @@ async function runSync() {
       onProgress: (d, t, label) => progressSet(d, t, label),
     });
     progressClose();
-    setConn('ok', state.cfg.driveEmail, 'на связи');
+    setConn('ok', state.cfg.driveEmail, 'Подключен к Google');
     const parts = [];
     if (res.added) parts.push(`новых дней: ${res.added}`);
     if (res.changed) parts.push(`обновлено: ${res.changed}`);
@@ -246,7 +246,7 @@ function syncQuietly() {
     .then(c => {
       state.cfg = c;
       applyTheme(c.theme);
-      if (state.conn.status !== 'ok') setConn('ok', c.driveEmail, 'на связи');
+      if (state.conn.status !== 'ok') setConn('ok', c.driveEmail, 'Подключен к Google');
       if (!$('screen-calendar').classList.contains('hidden')) return renderCalendar();
     })
     .catch(() => checkConnection().catch(() => { /* обновится при следующей возможности */ }));
@@ -316,7 +316,7 @@ async function checkConnection() {
     await settings.set('driveEmail', me.email);
     state.cfg = await settings.all();
   }
-  return setConn('ok', me.email || cfg.driveEmail, 'на связи');
+  return setConn('ok', me.email || cfg.driveEmail, 'Подключен к Google');
 }
 
 function renderConn() {
@@ -363,7 +363,7 @@ async function connectGoogle(btn = null) {
     }
     await settings.set('driveEmail', me.email);
     state.cfg = await settings.all();
-    setConn('ok', me.email, 'на связи');
+    setConn('ok', me.email, 'Подключен к Google');
     return true;
   } catch (e) {
     await checkConnection();
@@ -1315,7 +1315,7 @@ function bind() {
       if (!G.emailAllowed(me.email)) { G.forget(); toast('Этот аккаунт в список не входит'); return; }
       await settings.set('driveEmail', me.email);
       state.cfg = await settings.all();
-      setConn('ok', me.email, 'на связи');
+      setConn('ok', me.email, 'Подключен к Google');
       await renderGoogleCard();
       await runSync();
     } catch (e) {
