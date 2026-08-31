@@ -2,7 +2,7 @@ import { entries, blobs, settings, requestPersistence, storageEstimate, DB_NAME 
 import * as D from './dates.js';
 import { formatBytes } from './img.js';
 import { deriveFrom } from './align.js';
-import { buildVideo, playFrames, videoSupported } from './video.js';
+import { buildVideo, playFrames, videoSupported, pickMime } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
 import { createZip } from './zip.js';
@@ -54,14 +54,29 @@ function toast(text, ms = 2600) {
  * после «блокировать диалоги на этой странице» навсегда возвращает «нет» —
  * и кнопка выглядит сломанной, хотя код отработал.
  */
-function ask({ title, text = '', yes = 'Удалить', no = 'Отмена', danger = true }) {
+function ask({ title, text = '', items = [], yes = 'Удалить', no = 'Отмена', danger = true }) {
   return new Promise(resolve => {
     const box = $('ask');
     $('ask-title').textContent = title;
     $('ask-text').textContent = text;
     $('ask-text').classList.toggle('hidden', !text);
+    // Список фактов о том, что сейчас произойдёт: собираем узлами, а не
+    // разметкой строкой — в значения попадают имя ребёнка и имя файла.
+    const list = $('ask-list');
+    list.textContent = '';
+    for (const [label, value] of items) {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      const b = document.createElement('b');
+      b.textContent = label;
+      span.append(b, ' — ' + value);
+      li.append(span);
+      list.append(li);
+    }
+    list.classList.toggle('hidden', !items.length);
     $('ask-yes').textContent = yes;
     $('ask-yes').classList.toggle('btn-danger', danger);
+    $('ask-yes').classList.toggle('btn-primary', !danger);
     $('ask-no').textContent = no;
     box.classList.remove('hidden');
 
@@ -936,13 +951,63 @@ async function previewVideo() {
   if (state.previewAbort === ctrl) state.previewAbort = null;
 }
 
+/**
+ * Что будет, если нажать «Скачать». Сборка идёт в реальном времени и на
+ * телефоне, файл выходит увесистый — человеку честнее знать это до того, как
+ * экран на полминуты займёт полоска прогресса.
+ *
+ * Числа приблизительные и такими названы: длительность считается точно, а
+ * размер зависит от того, насколько кодек сожмёт конкретные кадры.
+ * @returns {Promise<boolean>} согласился ли человек
+ */
+async function confirmRender(days) {
+  const missing = await store.missingBodies(days);
+  const fps = Number($('video-fps').value);
+  // Столько же, сколько добавляет buildVideo: разгон рекордера и удержание
+  // последнего кадра, иначе таймлапс обрывается на полуслове.
+  const hold = Math.max(0.4, 4 / fps);
+  const secs = days.length / fps + hold + 0.12;
+  const ext = (pickMime() || '').startsWith('video/mp4') ? 'mp4' : 'webm';
+  const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${ext}`;
+  // Тот же битрейт, с которым пишет buildVideo: 8 Мбит/с ≈ 1 МБ на секунду.
+  const bytes = 8_000_000 / 8 * secs;
+  const shares = Boolean(navigator.canShare && navigator.canShare({
+    files: [new File([new Blob()], name, { type: `video/${ext}` })],
+  }));
+
+  return ask({
+    title: 'Собрать и скачать видео',
+    text: 'Видео соберётся прямо здесь, на телефоне: кадры проиграются ' +
+      'по одному и запишутся в файл.' + (missing.length
+        ? ' Часть кадров сначала скачается из папки в Google.'
+        : ' Интернет и Google для этого не нужны.'),
+    items: [
+      ['Кадров', `${days.length} · видео примерно на ${secs.toFixed(1)} с` +
+        (missing.length ? ` · ${missing.length} ещё не на телефоне` : '')],
+      ['Файл', `${name}, примерно ${formatBytes(bytes)}`],
+      ['Куда', shares
+        ? 'телефон спросит сам — можно сохранить или сразу отправить'
+        : 'в папку «Загрузки»'],
+      ['Сколько ждать', `примерно ${Math.ceil(secs + 1)} с — ` +
+        'приложение должно оставаться открытым'],
+    ],
+    yes: 'Скачать',
+    no: 'Не сейчас',
+    danger: false,
+  });
+}
+
 async function renderVideo() {
-  const frames = await framesForBuild();
-  if (!frames.length) return;
+  const days = await videoDays();
+  if (!days.length) return;
   if (!videoSupported()) {
     toast('Этот браузер не умеет записывать видео — выгрузите кадры в ZIP');
     return;
   }
+  if (!await confirmRender(days)) return;
+
+  const frames = await framesForBuild();
+  if (!frames.length) return;
   progressOpen('Собираю видео');
   try {
     const fps = Number($('video-fps').value);
@@ -1227,6 +1292,15 @@ function bind() {
   $('video-fps').oninput = e => { $('fps-label').textContent = e.target.value; refreshVideoInfo(); };
   $('video-from').onchange = refreshVideoInfo;
   $('video-to').onchange = refreshVideoInfo;
+  // Календарь по нажатию на поле открывает браузер сам, но не везде и не
+  // всегда: где-то нажатие лишь ставит курсор в «день». Подстраховываемся —
+  // если пикер уже открылся, повторный вызов просто бросит исключение.
+  for (const id of ['video-from', 'video-to']) {
+    $(id).onclick = e => {
+      if (!e.currentTarget.showPicker) return;
+      try { e.currentTarget.showPicker(); } catch { /* уже открыт */ }
+    };
+  }
   $('btn-preview').onclick = () => {
     if (state.previewAbort) { state.previewAbort.abort(); state.previewAbort = null;
       setPlayButton(false); return; }

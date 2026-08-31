@@ -306,20 +306,26 @@
       </div>
 
       <!-- Посмотреть — самое частое, что здесь делают, поэтому плей стоит
-           вплотную к выбору дней: выбрал диапазон и сразу глянул. Собирать
-           файл ради этого незачем, это отдельная кнопка ниже. -->
+           вплотную к выбору дней: выбрал диапазон и сразу глянул. Рядом —
+           скачивание: то же самое, но с файлом, и оно спрашивает подтверждение. -->
       <div class="row row-dates">
-        <label class="field grow">
-          <span>С какого дня</span>
-          <input id="video-from" type="date">
-        </label>
-        <label class="field grow">
-          <span>По какой</span>
-          <input id="video-to" type="date">
-        </label>
-        <button id="btn-preview" class="play-btn" aria-label="Посмотреть">
-          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M8 5.2v13.6L19 12z" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg>
-        </button>
+        <div class="dates">
+          <input id="video-from" type="date" aria-label="С какого дня">
+          <span class="dates-dash" aria-hidden="true">–</span>
+          <input id="video-to" type="date" aria-label="По какой день">
+        </div>
+        <div class="dates-actions">
+          <button id="btn-preview" class="play-btn" aria-label="Посмотреть">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M8 5.2v13.6L19 12z" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="btn-render" class="play-btn play-btn-quiet" aria-label="Скачать видео">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12"/>
+              <path d="M16.5 10.5 12 15l-4.5-4.5"/>
+              <path d="M3 15v1.2c0 1.68 0 2.52.327 3.162a3 3 0 0 0 1.311 1.311C5.28 21 6.12 21 7.8 21h8.4c1.68 0 2.52 0 3.162-.327a3 3 0 0 0 1.311-1.311C21 18.72 21 17.88 21 16.2V15"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <label class="field">
@@ -327,7 +333,6 @@
         <input id="video-fps" type="range" min="2" max="24" step="1" value="8">
       </label>
 
-      <button id="btn-render" class="btn btn-primary full">Скачать видео</button>
 
       <p id="video-info" class="hint"></p>
       <p id="video-unsupported" class="hint hidden">Этот браузер не умеет
@@ -504,6 +509,7 @@
   <div class="ask-box">
     <h2 id="ask-title"></h2>
     <p id="ask-text" class="hint"></p>
+    <ul id="ask-list" class="ask-list hidden"></ul>
     <div class="row">
       <button id="ask-no" class="btn grow">Отмена</button>
       <button id="ask-yes" class="btn btn-danger grow">Удалить</button>

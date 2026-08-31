@@ -311,16 +311,41 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 .video-slot canvas, .video-slot video { width: 100%; height: 100%; display: block; object-fit: contain; }
 
-/* Плей у дат. Коробка считается из тех же величин, что и у полей ввода
-   (padding + рамка + иконка 24px), поэтому кнопка совпадает с ними по высоте
-   без подогнанных руками чисел, а flex-end равняет её по самим полям, а не по
-   их подписям. */
-.row-dates { align-items: flex-end; }
-/* У .field снизу свои 14px, и flex-end равнял бы кнопку по краю отступа, а не
-   по самому полю. Отступ здесь лишний — ниже и так margin-top у следующей строки. */
-/* min-width: 0 — иначе поля даты упираются в собственную ширину и не дают
-   строке сжаться, выталкивая кнопку за край экрана. */
-.row-dates .field { margin-bottom: 0; min-width: 0; }
+/* Промежуток и обе кнопки живут в одной строке, а строка эта — на телефоне
+   шириной 335px. Подписи «С какого дня» и «По какой» пришлось снять: две даты
+   через тире читаются как промежуток и без них, зато всё умещается без
+   обрезанного «28/08/20…». */
+/* Промежутки в строке ужаты: каждые сэкономленные 2px уходят датам, которым
+   на узком экране не хватает буквально пары пикселей на «2026». */
+.row-dates { align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+/* Рамка одна на две даты: два отдельных поля съедали её и отступы дважды. */
+/* Ниже 375px даты и обе кнопки в одну строку встают только впритык, поэтому
+   flex-basis подобран так, чтобы на узких экранах строка переносилась: даты
+   занимают её целиком, кнопки уходят под них — вместо обрезанного «2026». */
+.dates {
+  display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 200px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 11px 8px;
+}
+.dates input[type=date] {
+  flex: 1; min-width: 0; padding: 0; border: 0; background: none;
+  color: var(--text); font: inherit; font-size: 14px;
+  -webkit-appearance: none; text-align: center;
+}
+/* Иконка календаря стоит ширины целого дня в дате, поэтому её не видно.
+   Но убирать её совсем нельзя: именно она открывает пикер по нажатию —
+   спрятанная через display:none, она перестаёт ловить касания. Поэтому она
+   осталась на месте, просто растянута на всё поле и прозрачна: нажатие в
+   любую точку даты открывает календарь, как и ожидается на телефоне. */
+.dates input[type=date] { position: relative; }
+.dates input[type=date]::-webkit-calendar-picker-indicator {
+  position: absolute; inset: 0; width: auto; height: auto;
+  margin: 0; padding: 0; opacity: 0; cursor: pointer;
+}
+.dates-dash { flex: none; color: var(--muted); }
+/* Плей и скачивание переносятся только парой: одна кнопка, уехавшая на
+   вторую строку, выглядит потерянной. */
+.dates-actions { flex: none; display: flex; gap: 8px; }
 .play-btn {
   flex: none; padding: 12px 14px; border: 1px solid transparent;
   border-radius: 12px; background: var(--accent); color: #fff;
@@ -328,6 +353,12 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 .play-btn:active { background: var(--accent-press); }
 .play-btn[disabled] { opacity: .55; }
+/* Скачивание стоит рядом с плеем, но оно реже и дороже: приглушаем, чтобы
+   в строке был один главный акцент, а не два одинаковых пятна. */
+.play-btn-quiet {
+  background: var(--surface-2); color: var(--accent); border-color: var(--line);
+}
+.play-btn-quiet:active { background: var(--line); }
 
 /* ---- Карточки настроек ---- */
 .card {
@@ -452,6 +483,15 @@ body.has-conn { --conn-h: 37px; }
   font-size: 17px; margin: 0 0 8px;
 }
 .ask-box .hint { margin: 0; }
+/* Перечень того, что будет с файлом: каждая строка — отдельный факт, читать
+   их глазами проще списком, чем одним абзацем. */
+.ask-list {
+  list-style: none; margin: 12px 0 0; padding: 0;
+  color: var(--muted); font-size: 13px; line-height: 1.5;
+}
+.ask-list li { display: flex; gap: 8px; padding: 5px 0; }
+.ask-list li::before { content: '·'; color: var(--accent); }
+.ask-list b { color: var(--text); font-weight: 600; }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-danger:active { background: var(--danger-press); }
 
