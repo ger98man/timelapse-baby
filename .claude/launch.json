@@ -9,7 +9,7 @@
         "http.server",
         "8787",
         "--bind",
-        "127.0.0.1"
+        "::"
       ],
       "port": 8787,
       "autoPort": false
