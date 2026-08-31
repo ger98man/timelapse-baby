@@ -545,6 +545,12 @@ body.has-conn { --conn-h: 37px; }
   max-width: 88vw; text-align: center; box-shadow: var(--shadow);
   display: flex; align-items: center; gap: 14px;
 }
+.check {
+  display: flex; align-items: center; gap: 10px; margin: 14px 0 2px;
+  font-size: 15px; cursor: pointer;
+}
+.check input { width: 20px; height: 20px; accent-color: var(--accent); margin: 0; }
+
 .toast-action {
   background: none; border: 0; padding: 0; font: inherit; font-weight: 650;
   color: var(--accent); cursor: pointer; white-space: nowrap;

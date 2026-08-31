@@ -247,6 +247,7 @@ const DEFAULT_SETTINGS = {
   eyeTarget: { lx: 0.375, ly: 0.42, rx: 0.625, ry: 0.42 },
   videoSize: 1080,
   videoFps: 8,
+  videoCaption: false,  // выжигать ли «День 47» в кадр при сборке
   lastExportAt: null,
   reminderHour: 20,
 

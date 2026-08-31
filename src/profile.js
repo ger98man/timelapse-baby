@@ -20,6 +20,7 @@ export const PROFILE_KEYS = [
   'eyeTarget',
   'videoSize',
   'videoFps',
+  'videoCaption',
   'masterMaxDim',
   'masterQuality',
 ];

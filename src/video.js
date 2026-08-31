@@ -26,6 +26,34 @@ export function videoSupported() {
 
 const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, ms)));
 
+/**
+ * Подпись в кадре: «День 47» в нижнем углу.
+ *
+ * Выжигается прямо в пиксели, потому что это единственный способ, которым она
+ * доедет до готового файла: субтитров у mp4 из MediaRecorder нет, а
+ * пересобирать видео ради текста никто не станет.
+ *
+ * Размеры считаются от стороны кадра, а не в пикселях: один и тот же код
+ * должен одинаково выглядеть и на предпросмотре 540, и на файле 1080.
+ */
+export function drawCaption(ctx, text, size) {
+  if (!text) return;
+  const pad = Math.round(size * 0.045);
+  const fontSize = Math.round(size * 0.052);
+  ctx.save();
+  ctx.font = `600 ${fontSize}px -apple-system, system-ui, sans-serif`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  // Тень вместо плашки: плашка закрывает угол кадра, а тень читается и на
+  // светлом, и на тёмном, ничего не пряча.
+  ctx.shadowColor = 'rgba(0,0,0,.75)';
+  ctx.shadowBlur = Math.round(size * 0.02);
+  ctx.shadowOffsetY = Math.round(size * 0.004);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, pad, size - pad);
+  ctx.restore();
+}
+
 function decode(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -62,6 +90,7 @@ async function playFrames(frames, canvas, fps, { onFrame, signal } = {}) {
     ctx.fillRect(0, 0, size, size);
     ctx.drawImage(current.img, 0, 0, size, size);
     current.release();
+    drawCaption(ctx, frames[i].caption, size);
 
     if (onFrame) onFrame(i, frames[i]);
     await sleep(t0 + (i + 1) * frameMs - performance.now());
@@ -69,7 +98,7 @@ async function playFrames(frames, canvas, fps, { onFrame, signal } = {}) {
 }
 
 /**
- * @param {Array<{date:string, blob:Blob}>} frames  выровненные кадры по порядку
+ * @param {Array<{date:string, blob:Blob, caption?:string}>} frames  кадры по порядку
  * @param {{fps:number,size:number,holdLast:number}} opts
  * @param {(i:number,total:number)=>void} onProgress
  * @returns {Promise<{blob:Blob, mime:string, ext:string}>}

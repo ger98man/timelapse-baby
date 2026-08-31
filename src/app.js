@@ -2,7 +2,7 @@ import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { formatBytes } from './img.js';
 import { drawAligned } from './align.js';
-import { buildVideo, videoSupported, pickMime } from './video.js';
+import { buildVideo, videoSupported, pickMime, drawCaption } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
 import { createZip } from './zip.js';
@@ -1017,10 +1017,23 @@ async function framesForBuild(days) {
     { onProgress: (d, t, label) => progressSet(d, t, label) });
   progressClose();
 
+  if (state.cfg.videoCaption) {
+    for (const frame of frames) frame.caption = captionFor(frame.date);
+  }
+
   if (missing && puller) {
     toast(`Не удалось загрузить ${missing} ${D.plural(missing, 'кадр', 'кадра', 'кадров')}`);
   }
   return frames;
+}
+
+/**
+ * Что выжигать в кадр. Тот же счётчик, что и в заголовке «Сегодня»: «День 47»
+ * после родов, «За 30 дней до встречи» до них. Без даты рождения счётчика нет
+ * — тогда и подписывать нечем, и чекбокс не показывается.
+ */
+function captionFor(date) {
+  return D.dayLabel(date, state.cfg).label;
 }
 
 async function refreshVideoInfo() {
@@ -1116,6 +1129,9 @@ async function drawFrame(i) {
     // поэтому предпросмотр показывает именно то, что окажется в файле.
     drawAligned(ctx, img, img.naturalWidth, img.naturalHeight,
       canvas.width, frame.eyes, state.cfg.eyeTarget);
+    if (state.cfg.videoCaption) {
+      drawCaption(ctx, captionFor(frame.date), canvas.width);
+    }
   }
   $('video-seek').value = String(i);
   $('video-pos').textContent = D.formatLong(frame.date).replace(/ \d{4}$/, '');
@@ -1438,6 +1454,16 @@ async function initVideoScreen() {
   // перезапуска возвращался к тому, что подставил браузер.
   $('video-fps').value = String(state.cfg.videoFps);
   $('fps-label').textContent = String(state.cfg.videoFps);
+
+  // Без даты рождения счётчика дней нет, подписывать нечем — прячем совсем,
+  // чтобы галочка не обещала того, чего не будет.
+  const canCaption = Boolean(state.cfg.birthDate);
+  $('video-caption').closest('.check').classList.toggle('hidden', !canCaption);
+  $('video-caption').checked = Boolean(state.cfg.videoCaption);
+  if (canCaption) {
+    $('caption-sample').textContent = captionFor($('video-from').value || D.todayKey());
+  }
+
   await refreshVideoInfo();
 }
 
@@ -1568,6 +1594,14 @@ function bind() {
     await saveShared();
   };
   // Промежуток сменился — показанный ряд кадров уже не про него.
+  $('video-caption').onchange = async e => {
+    await settings.set('videoCaption', e.target.checked);
+    state.cfg = await settings.all();
+    await saveShared();
+    // Кадры уже нарисованы без подписи — перерисовываем то, что на экране.
+    if (player.frames.length) await drawFrame(player.i);
+  };
+
   const onRange = () => { resetPlayer(); refreshVideoInfo(); };
   $('video-from').onchange = onRange;
   $('video-to').onchange = onRange;
