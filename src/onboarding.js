@@ -9,7 +9,7 @@
 import { settings } from './db.js';
 import { GOOGLE, configured, pickerReady } from '../config.js';
 import * as G from './google.js';
-import { createDrive } from './drive.js';
+import { createDrive, rootName } from './drive.js';
 import { pickFolder } from './picker.js';
 import { fetchProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
 import * as D from './dates.js';
@@ -116,6 +116,61 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       if (label) b.textContent = label;
     }
 
+    /**
+     * Папки нет — спрашиваем, кто пришёл. Заводить её молча нельзя: у второго
+     * родителя от этого появляется собственный пустой альбом рядом с общим,
+     * и дальше он снимает не туда, ничего не подозревая.
+     */
+    function askWhoYouAre() {
+      $('wiz-folder-text').textContent =
+        'Папки пока нет. Если альбом заводите вы — создайте её. Если снимать ' +
+        'уже начал второй родитель — подключитесь к его папке.';
+      $('wiz-folder-choice').classList.remove('hidden');
+      $('wiz-pick-folder').classList.toggle('hidden', !pickerReady());
+      setNext(null);
+    }
+
+    /** Папка есть: показать, запомнить и забрать из неё настройки. */
+    async function useFolder(root) {
+      const email = await settings.get('driveEmail');
+      const name = await drive.nameRoot(root, email);
+
+      state.folderId = root.id;
+      state.folderName = name;
+      await settings.merge({ driveFolderId: root.id, driveFolderName: name });
+
+      $('wiz-folder-choice').classList.add('hidden');
+      $('wiz-folder-text').textContent =
+        'Готово. Всё, что вы снимете, будет складываться сюда.';
+      $('wiz-folder-name').textContent = name;
+      $('wiz-folder-link').href = `https://drive.google.com/drive/folders/${root.id}`;
+      $('wiz-folder-ok').classList.remove('hidden');
+      setNext('Дальше', true);
+
+      // В этой же папке лежат и настройки, и вся история. Если они там
+      // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
+      const files = await drive.listDayFiles();
+      state.remoteDays = countRemoteDays(files);
+      const remote = await fetchProfile(drive, files);
+      if (remote && remote.birthDate) {
+        const patch = {};
+        for (const key of PROFILE_KEYS) {
+          if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
+        }
+        await settings.merge(patch);
+        dropStep('baby');
+        const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
+        $('wiz-folder-text').textContent = state.remoteDays
+          ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
+            'Они появятся в приложении, вводить ничего не нужно.'
+          : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
+        renderChrome();
+      } else if (state.remoteDays) {
+        $('wiz-folder-text').textContent =
+          `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении.`;
+      }
+    }
+
     // --- что происходит при входе в каждый шаг ---------------------------
     const enter = {
       async welcome() {
@@ -148,50 +203,21 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       async folder() {
         const err = $('wiz-folder-error');
         err.textContent = '';
-        $('wiz-folder-join').classList.toggle('hidden', !pickerReady());
         setSkip(null);
-        setNext('Дальше', false);
-
-        $('wiz-folder-text').textContent = state.folderId
-          ? 'Папка уже подключена.'
-          : 'Создаю папку в вашем Диске…';
-        $('wiz-folder-ok').classList.toggle('hidden', !state.folderId);
+        setNext(null);
+        $('wiz-folder-ok').classList.add('hidden');
+        $('wiz-folder-choice').classList.add('hidden');
+        $('wiz-folder-text').textContent = 'Ищу папку в вашем Диске…';
 
         try {
-          const id = await drive.ensureRoot(state.folderName, state.folderId);
-          state.folderId = id;
-          await settings.set('driveFolderId', id);
-          $('wiz-folder-text').textContent =
-            'Готово. Всё, что вы снимете, будет складываться сюда.';
-          $('wiz-folder-name').textContent = state.folderName;
-          $('wiz-folder-link').href = `https://drive.google.com/drive/folders/${id}`;
-          $('wiz-folder-ok').classList.remove('hidden');
-
-          // В этой же папке лежат и настройки, и вся история. Если они там
-          // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
-          const files = await drive.listDayFiles();
-          state.remoteDays = countRemoteDays(files);
-          const remote = await fetchProfile(drive, files);
-          if (remote && remote.birthDate) {
-            const patch = {};
-            for (const key of PROFILE_KEYS) {
-              if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
-            }
-            await settings.merge(patch);
-            dropStep('baby');
-            const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
-            $('wiz-folder-text').textContent = state.remoteDays
-              ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
-                'Они появятся в приложении, вводить ничего не нужно.'
-              : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
-            renderChrome();
-          } else if (state.remoteDays) {
-            $('wiz-folder-text').textContent =
-              `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении.`;
-          }
-          setNext('Дальше', true);
+          const root = await drive.findRoot(state.folderId);
+          if (root) return await useFolder(root);
+          askWhoYouAre();
         } catch (e) {
-          $('wiz-folder-text').textContent = 'Папку создать не получилось.';
+          // Папку не нашли из-за сети — предлагать «завести» тут нельзя:
+          // именно так рядом со старым альбомом и появляется второй.
+          // Единственное честное действие — повторить попытку.
+          $('wiz-folder-text').textContent = 'Не удалось заглянуть в Диск.';
           err.textContent = e.message || 'Google Диск не ответил';
           setNext('Попробовать снова', true);
         }
@@ -209,8 +235,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       async install() {
         $('wiz-install-ios').classList.toggle('hidden', !isIOS());
         $('wiz-install-other').classList.toggle('hidden', isIOS());
-        setNext('Готово');
-        setSkip('Позже');
+        // «Готово» и «Позже» вели в одно и то же место: установку на домашний
+        // экран делает браузер, приложение о ней не знает и знать не может.
+        // Две кнопки изображали выбор, которого нет.
+        setNext('Дальше');
+        setSkip(null);
       },
 
       async invite() {
@@ -299,6 +328,23 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       await enter.signin();
     };
 
+    $('wiz-folder-create').onclick = async () => {
+      const err = $('wiz-folder-error');
+      const b = $('wiz-folder-create');
+      err.textContent = '';
+      b.disabled = true;
+      try {
+        const email = await settings.get('driveEmail');
+        const root = await drive.createRoot(rootName(GOOGLE.folderName, email));
+        await useFolder(root);
+        onToast(`Папка «${root.name}» создана`);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось создать папку';
+      } finally {
+        b.disabled = false;
+      }
+    };
+
     $('wiz-pick-folder').onclick = async () => {
       const err = $('wiz-folder-error');
       err.textContent = '';
@@ -306,11 +352,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         const token = await G.getAccessToken({ interactive: true });
         const folder = await pickFolder(token);
         if (!folder) return;
+        // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
+        // на ней уже стоит, от владельца.
         await drive.adoptRoot(folder.id);
-        state.folderId = folder.id;
-        state.folderName = folder.name;
-        await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
-        await enter.folder();
+        await useFolder({ id: folder.id, name: folder.name, ownedByMe: false });
         onToast(`Папка «${folder.name}» подключена`);
       } catch (e) {
         err.textContent = e.message || 'Не удалось выбрать папку';

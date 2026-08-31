@@ -13,6 +13,13 @@ const FOLDER_MIME = 'application/vnd.google-apps.folder';
 /** Метка, по которой приложение находит свои файлы одним запросом. */
 export const TAG = 'everyday';
 
+/**
+ * Имя папки подписываем почтой владельца. Без этого у второго родителя в окне
+ * выбора оказываются две строчки «TimelapseBaby» — своя и общая, — и понять,
+ * какую подключать, нельзя. Почта же видна и в Диске, и в списке доступов.
+ */
+export const rootName = (base, email) => (email ? `${base} — ${email}` : base);
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
@@ -76,29 +83,58 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     const meta = { name, mimeType: FOLDER_MIME };
     if (parentId) meta.parents = [parentId];
     if (appProperties) meta.appProperties = appProperties;
-    return call(`${API}/files?fields=id,name`, {
+    return call(`${API}/files?fields=id,name,ownedByMe,appProperties`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(meta),
     });
   }
 
-  /** Папка приложения. Ищем свою по метке, иначе создаём. */
-  async function ensureRoot(folderName, knownId) {
+  /**
+   * Папка приложения, если она есть. Ничего не создаёт — и это главное:
+   * альбом заводит человек, а не побочный эффект запуска. Папка, созданная
+   * молча, — это второй альбом у того, кто хотел подключиться к общему,
+   * и вторая одинаковая строчка в окне выбора у второго родителя.
+   */
+  async function findRoot(knownId) {
+    const fields = 'id,name,trashed,ownedByMe,appProperties';
     if (knownId) {
       try {
-        const f = await call(`${API}/files/${knownId}?fields=id,name,trashed`);
-        if (!f.trashed) return f.id;
-      } catch { /* удалили или отобрали доступ — заведём заново */ }
+        const f = await call(`${API}/files/${knownId}?fields=${fields}`);
+        if (!f.trashed) return f;
+      } catch { /* удалили или отобрали доступ — поищем по метке */ }
     }
     const found = await list(q([
       `appProperties has { key='${TAG}Root' and value='1' }`,
       `mimeType='${FOLDER_MIME}'`,
       'trashed=false',
-    ]));
-    if (found.length) return found[0].id;
-    const created = await createFolder(folderName, null, { [`${TAG}Root`]: '1' });
-    return created.id;
+    ]), 'files(id,name,ownedByMe,appProperties),nextPageToken');
+    return found[0] || null;
+  }
+
+  /** Заводит папку альбома. Вызывается только по явному решению человека. */
+  async function createRoot(name) {
+    return createFolder(name, null, { [`${TAG}Root`]: '1', [`${TAG}Named`]: '1' });
+  }
+
+  /**
+   * Дописывает почту к имени своей папки. Только своей: общую, заведённую
+   * первым родителем, переименовывать нельзя — она у него на виду.
+   *
+   * Отметка в метаданных нужна, чтобы сделать это ровно один раз. Иначе
+   * человек, переименовавший папку по-своему, спорил бы с приложением
+   * при каждой синхронизации.
+   */
+  async function nameRoot(root, email) {
+    if (!email || !root.ownedByMe) return root.name;
+    if (root.appProperties && root.appProperties[`${TAG}Named`]) return root.name;
+    const name = rootName(root.name, email);
+    await call(`${API}/files/${root.id}?fields=id,name`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, appProperties: { [`${TAG}Named`]: '1' } }),
+    });
+    return name;
   }
 
   async function ensureChildFolder(name, parentId) {
@@ -229,7 +265,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   }
 
   return {
-    ensureRoot, adoptRoot, folderForDay, putDayFile, updateProps,
+    findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
     listDayFiles, download, downloadThumb, thumbLink, trash, folderLink,
   };
 }

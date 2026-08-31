@@ -65,7 +65,11 @@ function fakeDrive() {
   return {
     files,
     downloads,
-    async ensureRoot(name, known) { return known || 'root'; },
+    async findRoot(known) {
+      return { id: known || 'root', name: 'TimelapseBaby', ownedByMe: true,
+               appProperties: { everydayNamed: '1' } };
+    },
+    async nameRoot(root) { return root.name; },
     async adoptRoot(id) { return id; },
     async putDayFile({ dateKey, name, blob, kind, fileId, props }) {
       const id = fileId || 'f' + (++seq);

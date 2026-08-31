@@ -105,7 +105,7 @@
       <!-- 3. Папка -->
       <section class="step hidden" data-step="folder">
         <h1 class="cover-title">Папка</h1>
-        <p id="wiz-folder-text" class="cover-sub">Создаю папку в вашем Диске…</p>
+        <p id="wiz-folder-text" class="cover-sub">Ищу папку в вашем Диске…</p>
         <div id="wiz-folder-ok" class="hidden">
           <div class="folder-card">
             <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 7.5a1 1 0 011-1h5l2 2h9a1 1 0 011 1V18a1 1 0 01-1 1H4a1 1 0 01-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
@@ -116,13 +116,14 @@
             JPEG и текстовые файлы с комментариями. Их можно листать в приложении
             Google Диск, копировать и распечатывать без нашего кода.</p>
         </div>
-        <details class="drop" id="wiz-folder-join">
-          <summary>Я второй родитель, папка уже создана</summary>
-          <p class="hint">Пусть первый откроет папку в Диске и даст вам доступ
-            <b>на редактирование</b>. После этого выберите её здесь — и вы будете
-            снимать в один альбом.</p>
-          <button id="wiz-pick-folder" class="btn full">Выбрать общую папку</button>
-        </details>
+        <div id="wiz-folder-choice" class="hidden">
+          <button id="wiz-folder-create" class="btn btn-primary full">Я первый — завести папку</button>
+          <button id="wiz-pick-folder" class="btn full">Я второй — подключиться к общей</button>
+          <p class="hint">Второму родителю: пусть первый откроет папку в Диске и
+            даст вам доступ <b>на редактирование</b>. После этого выберите её
+            здесь — и вы будете снимать в один альбом. Папки подписаны почтой
+            владельца, так что свою и общую легко различить.</p>
+        </div>
         <p id="wiz-folder-error" class="error"></p>
       </section>
 

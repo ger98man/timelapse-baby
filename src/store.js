@@ -65,12 +65,27 @@ function indexRemote(files) {
   return byDay;
 }
 
-/** Папку нашли и запомнили — всё остальное отсчитывается от неё. */
+/**
+ * Папку нашли и запомнили — всё остальное отсчитывается от неё.
+ *
+ * Не нашли — это ошибка, а не повод завести новую. Папка исчезает из виду,
+ * когда её удалили или отозвали доступ; в обоих случаях молча созданный
+ * пустой альбом рядом со старым — худшее, что можно сделать. Заводит папку
+ * только мастер и только по явному «я первый родитель».
+ */
 export async function ensureFolder(drive) {
   const cfg = await settings.all();
-  const rootId = await drive.ensureRoot(cfg.driveFolderName || 'TimelapseBaby', cfg.driveFolderId);
-  if (rootId !== cfg.driveFolderId) await settings.set('driveFolderId', rootId);
-  return rootId;
+  const root = await drive.findRoot(cfg.driveFolderId);
+  if (!root) {
+    throw new Error('Папка альбома не найдена. Откройте «Ещё» → «Пройти ' +
+      'настройку заново» и подключите её.');
+  }
+  const name = await drive.nameRoot(root, cfg.driveEmail);
+  const patch = {};
+  if (root.id !== cfg.driveFolderId) patch.driveFolderId = root.id;
+  if (name !== cfg.driveFolderName) patch.driveFolderName = name;
+  if (Object.keys(patch).length) await settings.merge(patch);
+  return root.id;
 }
 
 /**
