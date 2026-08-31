@@ -222,6 +222,8 @@ function badgingAvailable() {
   return typeof navigator.setAppBadge === 'function';
 }
 
+const hourLabel = h => String(h).padStart(2, '0') + ':00';
+
 /**
  * Сверяет значок с положением дел. Зовётся отовсюду, где день мог смениться:
  * после отрисовки «Сегодня», при возврате из фона, при запуске.
@@ -1510,13 +1512,17 @@ function renderThemeCard() {
  * молча ничего не делает.
  */
 function renderRemindCard() {
-  $('set-remind').checked = Boolean(state.cfg.remindBadge);
-  $('remind-hour').textContent =
-    String(state.cfg.reminderHour).padStart(2, '0') + ':00';
+  const on = Boolean(state.cfg.remindBadge);
+  $('set-remind').checked = on;
+  $('set-remind-hour').value = String(state.cfg.reminderHour);
+  $('remind-hour').textContent = hourLabel(state.cfg.reminderHour);
 
   const note = $('remind-note');
   const can = badgingAvailable();
   $('set-remind').disabled = !can;
+  // Час важен, только пока напоминание включено: выключенным он лишний ряд
+  // на экране, который ничего не делает.
+  $('remind-when').classList.toggle('hidden', !on || !can);
   note.classList.toggle('hidden', can);
   if (!can) {
     note.textContent = 'В этом браузере значка на иконке не бывает. Он ' +
@@ -1904,10 +1910,24 @@ function bind() {
   $('set-remind').onchange = async e => {
     await settings.set('remindBadge', e.target.checked);
     state.cfg = await settings.all();
+    renderRemindCard();
     await syncBadge();
     toast(e.target.checked
-      ? `Значок появится после ${String(state.cfg.reminderHour).padStart(2, '0')}:00`
+      ? `Значок появится после ${hourLabel(state.cfg.reminderHour)}`
       : 'Напоминание выключено');
+  };
+
+  // Ползунок ведёт подпись сразу, а сохраняется отпущенным: писать в базу на
+  // каждый пиксель протаскивания незачем.
+  $('set-remind-hour').oninput = e => {
+    $('remind-hour').textContent = hourLabel(Number(e.target.value));
+  };
+  $('set-remind-hour').onchange = async e => {
+    await settings.set('reminderHour', Number(e.target.value));
+    state.cfg = await settings.all();
+    // Час мог перешагнуть текущее время в любую сторону — значок пересобираем
+    // сразу, чтобы он не врал до следующего открытия «Сегодня».
+    await syncBadge();
   };
 
   $('btn-export').onclick = async () => {
