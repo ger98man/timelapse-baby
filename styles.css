@@ -543,6 +543,11 @@ body.has-conn { --conn-h: 37px; }
   border: 1px solid var(--line); color: var(--text);
   padding: 11px 18px; border-radius: 12px; font-size: 14px;
   max-width: 88vw; text-align: center; box-shadow: var(--shadow);
+  display: flex; align-items: center; gap: 14px;
+}
+.toast-action {
+  background: none; border: 0; padding: 0; font: inherit; font-weight: 650;
+  color: var(--accent); cursor: pointer; white-space: nowrap;
 }
 
 /* ---- Выбор оформления ---- */

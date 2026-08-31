@@ -96,7 +96,7 @@ function fakeDrive() {
     listCalls: 0,
     async listDayFiles() {
       drive.listCalls++;
-      return [...files.values()].map(f => ({
+      return [...files.values()].filter(f => !f.trashed).map(f => ({
         ...f,
         appProperties: { ...f.appProperties },
         // Google отдаёт ссылку на готовую миниатюру прямо в описи
@@ -113,11 +113,19 @@ function fakeDrive() {
       downloads.push('thumb');
       return files.get(id).blob;      // как будто Google уже уменьшил
     },
-    async trash(id) { files.delete(id); },
+    // Диск не стирает файл, а помечает его как удалённый и держит 30 дней.
+    // Заглушка обязана делать так же, иначе «Вернуть» нечем проверить.
+    async trash(id) { files.get(id).trashed = true; },
+    async untrash(id) { files.get(id).trashed = false; },
     pulled(kind) { return downloads.filter(k => k === kind).length; },
-    count(kind) { return [...files.values()].filter(f => f.appProperties.kind === kind).length; },
+    count(kind) {
+      return [...files.values()]
+        .filter(f => !f.trashed && f.appProperties.kind === kind).length;
+    },
+    inTrash() { return [...files.values()].filter(f => f.trashed).length; },
     dayFile(day, kind = 'photo') {
-      return [...files.values()].find(f => f.appProperties.day === day && f.appProperties.kind === kind);
+      return [...files.values()].find(f =>
+        !f.trashed && f.appProperties.day === day && f.appProperties.kind === kind);
     },
   };
   return drive;
@@ -256,13 +264,31 @@ async function jpeg(tint) {
   check('тела на месте', (await blobs.count()) === 2);
 
   caseOf('Удаление дня доходит до папки');
-  await store.removeDay(drive, '2026-09-10');
+  await store.putComment(drive, '2026-09-10', 'подпись, которая должна уйти с днём');
+  // В корзине уже кое-что лежит с прошлых проверок, поэтому считаем прибавку
+  const trashBefore = drive.inTrash();
+  const removed = await store.removeDay(drive, '2026-09-10');
   check('снимок из папки исчез', !drive.dayFile('2026-09-10'));
+  check('комментарий ушёл с ним', !drive.dayFile('2026-09-10', 'note'));
   check('день исчез из кэша', !(await entries.get('2026-09-10')));
   check('тело исчезло тоже', !(await blobs.get('2026-09-10')));
+  check('удалённое лежит в корзине, а не стёрто', drive.inTrash() - trashBefore === 2,
+    `прибавка=${drive.inTrash() - trashBefore}`);
   r = await store.refresh(drive);
   check('и не возвращается после обновления', !(await entries.get('2026-09-10')),
     `дней=${(await entries.allDates()).length}`);
+
+  caseOf('Удаление можно отменить');
+  const back10 = await store.restoreDay(drive, removed);
+  check('день вернулся в опись', Boolean(back10) && back10.date === '2026-09-10');
+  check('снимок снова в папке', Boolean(drive.dayFile('2026-09-10')));
+  check('комментарий вернулся вместе с ним',
+    Boolean(drive.dayFile('2026-09-10', 'note')));
+  check('из корзины забрали ровно этот день', drive.inTrash() === trashBefore,
+    `в корзине=${drive.inTrash()}, было=${trashBefore}`);
+  // дальше он не нужен: остальные проверки писались от двух дней
+  await store.removeDay(drive, '2026-09-10');
+  await store.refresh(drive);
 
   caseOf('Чужие правки в папке доходят до телефона');
   // как будто второй родитель снял свой день и подписал его

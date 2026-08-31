@@ -258,6 +258,18 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     });
   }
 
+  /**
+   * Достать файл обратно из корзины. Работает ровно до того, как корзину
+   * очистят: Диск держит удалённое 30 дней, и всё это время удаление обратимо.
+   */
+  async function untrash(fileId) {
+    return call(`${API}/files/${fileId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: false }),
+    });
+  }
+
   /** Ссылка на папку — чтобы отдать второму родителю через обычный доступ Диска. */
   async function folderLink(rootId) {
     const f = await call(`${API}/files/${rootId}?fields=webViewLink`);
@@ -276,6 +288,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, download, trash, folderLink, usage,
+    listDayFiles, download, trash, untrash, folderLink, usage,
   };
 }

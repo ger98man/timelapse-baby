@@ -42,9 +42,21 @@ function url(blob) {
 }
 
 let toastTimer;
-function toast(text, ms = 2600) {
+
+/**
+ * @param {string} text
+ * @param {number} ms сколько висеть
+ * @param {?{label:string, run:Function}} action кнопка справа — для «Вернуть»
+ */
+function toast(text, ms = 2600, action = null) {
   const el = $('toast');
-  el.textContent = text;
+  const btn = $('toast-action');
+  $('toast-text').textContent = text;
+  btn.classList.toggle('hidden', !action);
+  btn.textContent = action ? action.label : '';
+  btn.onclick = action
+    ? () => { el.classList.add('hidden'); clearTimeout(toastTimer); action.run(); }
+    : null;
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
@@ -1498,8 +1510,9 @@ function bind() {
     $('today-comment').value = '';
 
     progressOpen('Удаляю из общей папки');
+    let removed;
     try {
-      await store.removeDay(drive(), key);   // сначала папка, потом кэш
+      removed = await store.removeDay(drive(), key);   // сначала папка, потом кэш
     } catch (e) {
       progressClose();
       toast(e.message || 'Не удалось удалить из папки — на телефоне тоже оставил');
@@ -1510,8 +1523,28 @@ function bind() {
     closeDay();
     await renderToday();
     if (!$('screen-calendar').classList.contains('hidden')) await renderCalendar();
-    toast('Удалено');
+
+    // Файл лежит в корзине Диска 30 дней, поэтому «вернуть» — это снятый
+    // флажок, а не хранение копии у нас. Десяти секунд хватает, чтобы понять,
+    // что удалил не тот день; дальше остаётся корзина Диска.
+    toast('Удалено', 10000, { label: 'Вернуть', run: () => undoRemove(removed) });
   };
+  const undoRemove = async removed => {
+    progressOpen('Возвращаю день');
+    try {
+      await store.restoreDay(drive(), removed);
+    } catch (e) {
+      progressClose();
+      toast(e.message || 'Не удалось вернуть — день остался в корзине Диска', 4200);
+      return;
+    }
+    progressClose();
+    freeUrls();
+    await renderToday();
+    if (!$('screen-calendar').classList.contains('hidden')) await renderCalendar();
+    toast('День вернулся');
+  };
+
   $('btn-delete').onclick = () => removeDay(D.todayKey());
   $('day-delete').onclick = () => removeDay(dayKey);
   $('day-close').onclick = closeDay;

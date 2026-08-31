@@ -539,19 +539,44 @@ export async function putComment(drive, date, text) {
   return entry;
 }
 
-/** Удаляет день целиком: один день — один файл, значит и в папке тоже. */
+/**
+ * Удаляет день целиком: один день — один файл, значит и в папке тоже.
+ *
+ * Возвращает список того, что ушло в корзину, — по нему день можно достать
+ * обратно. Корзина Диска держит файлы 30 дней, так что «отменить» — это не
+ * хранение копии у нас, а всего лишь снятый флажок.
+ *
+ * @returns {Promise<{date:string, ids:string[]}>}
+ */
 export async function removeDay(drive, date) {
   const entry = await entries.get(date);
+  const ids = [];
   if (entry) {
     // Комментарий первым, снимок вторым. Приложение видит день по снимку,
     // поэтому обратный порядок при отказе на середине оставлял бы в папке
     // осиротевший .txt, до которого больше никак не добраться.
     for (const id of [entry.noteId, entry.fileId].filter(Boolean)) {
       await drive.trash(id);      // если Диск откажет, бросим до правки кэша
+      ids.push(id);
     }
   }
   await entries.delete(date);
   await blobs.delete(date);
   await bench.delete(date);
   previewCache.delete(date);
+  return { date, ids };
+}
+
+/**
+ * Достаёт день обратно из корзины и возвращает его в опись.
+ *
+ * Кэша своего у нас нет, поэтому «вернуть» — это снять флажок в папке и
+ * перечитать опись: день приедет оттуда сам, вместе с комментарием и
+ * разметкой, ровно таким, каким был.
+ */
+export async function restoreDay(drive, removed) {
+  if (!removed || !removed.ids.length) return null;
+  for (const id of removed.ids) await drive.untrash(id);
+  await refresh(drive);
+  return entries.get(removed.date);
 }
