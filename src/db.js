@@ -249,7 +249,11 @@ const DEFAULT_SETTINGS = {
   videoFps: 8,
   videoCaption: false,  // выжигать ли «День 47» в кадр при сборке
   lastExportAt: null,
-  reminderHour: 20,
+  // Напоминание значком: своё на каждом устройстве, поэтому в config.json не
+  // уезжает — второму родителю его телефон нужен не для того, чтобы напоминать
+  // о снимке, который сделает первый.
+  remindBadge: false,
+  reminderHour: 20,     // с какого часа день считается «ещё не снятым»
 
   // Google Диск
   onboardingDone: false,
