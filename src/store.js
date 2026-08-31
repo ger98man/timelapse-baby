@@ -421,6 +421,21 @@ export async function masterFor(drive, date) {
   return photo;
 }
 
+/**
+ * Разметка ближайшего размеченного дня до указанного.
+ *
+ * Снимки изо дня в день похожи: ребёнок в том же кресле, родитель на том же
+ * месте. Поэтому вчерашние точки почти всегда стоят там, где нужно, и разметка
+ * из «поставь две точки» превращается в «проверь и сохрани».
+ */
+export async function eyesBefore(date) {
+  const rows = await entries.range('0000-01-01', date);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].date !== date && rows[i].eyes) return rows[i].eyes;
+  }
+  return null;
+}
+
 /** Сколько дней промежутка придётся качать — чтобы сказать это до сборки. */
 export async function pendingFrames(dates) {
   const ready = new Set(await blobs.allDates());

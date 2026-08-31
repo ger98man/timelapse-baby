@@ -180,6 +180,16 @@ async function jpeg(tint) {
   check('разметка вернулась описью', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
   const listedBefore = drive.listCalls;
 
+  caseOf('Новый день начинают со вчерашней разметки');
+  check('нашлась разметка соседнего дня',
+    Boolean(await store.eyesBefore('2026-09-12')));
+  check('это именно та, что ставили', 
+    Math.abs((await store.eyesBefore('2026-09-12')).lx - 0.41) < 1e-4);
+  check('свою же разметку за тот же день не подставляем',
+    (await store.eyesBefore('2026-09-11')) === null);
+  check('до первого размеченного дня подставлять нечего',
+    (await store.eyesBefore('2026-09-10')) === null);
+
   caseOf('Показ идёт по миниатюрам Диска');
   drive.downloads.length = 0;
   const preview = await store.previewFrames(drive, ['2026-09-10', '2026-09-11']);

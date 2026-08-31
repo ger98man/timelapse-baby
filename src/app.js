@@ -871,8 +871,15 @@ async function openAlign(key) {
   img.src = url(body.photo);
   $('align-title').textContent = D.dayLabel(key, state.cfg).label;
 
-  state.align = { key, entry, l: entry.eyes ? { x: entry.eyes.lx, y: entry.eyes.ly } : null,
-                  r: entry.eyes ? { x: entry.eyes.rx, y: entry.eyes.ry } : null, drag: null };
+  // День ещё не размечали — подставляем вчерашние точки. Снимки изо дня в день
+  // похожи, поэтому обычно они уже стоят там, где надо, и остаётся проверить.
+  // Сохранится всё равно только то, что человек подтвердил кнопкой.
+  const eyes = entry.eyes || await store.eyesBefore(key);
+  const guessed = !entry.eyes && Boolean(eyes);
+
+  state.align = { key, entry, guessed,
+                  l: eyes ? { x: eyes.lx, y: eyes.ly } : null,
+                  r: eyes ? { x: eyes.rx, y: eyes.ry } : null, drag: null };
   drawDots();
   $('overlay-align').classList.remove('hidden');
 }
@@ -889,6 +896,7 @@ function drawDots() {
   $('align-hint').textContent = !a.l
     ? 'Ткните в правый глаз ребёнка (тот, что слева на фото).'
     : !a.r ? 'Теперь во второй глаз.'
+    : a.guessed ? 'Точки стоят как вчера. Поправьте, если сместились, — и сохраняйте.'
     : 'Точки можно двигать пальцем. Готово — и кадр встанет как надо.';
 }
 
@@ -1463,7 +1471,12 @@ function bind() {
   $('btn-align').onclick = () => { if (requireOnline()) openAlign(D.todayKey()); };
   $('day-align').onclick = () => { if (requireOnline()) openAlign(dayKey); };
   $('align-close').onclick = () => { $('overlay-align').classList.add('hidden'); state.align = null; };
-  $('align-reset').onclick = () => { state.align.l = null; state.align.r = null; drawDots(); };
+  $('align-reset').onclick = () => {
+    state.align.l = null;
+    state.align.r = null;
+    state.align.guessed = false;    // сбросили — значит ставят заново, не «как вчера»
+    drawDots();
+  };
   $('align-save').onclick = saveAlign;
   bindAlignStage();
 
