@@ -1234,7 +1234,7 @@ async function framesToZip(days) {
 
 // --- настройки --------------------------------------------------------------
 
-const THEMES = ['default', 'girl', 'boy'];
+const THEMES = ['girl', 'boy'];
 
 /**
  * Оформление. Настоящее значение — в настройках, а значит и в config.json
@@ -1243,10 +1243,12 @@ const THEMES = ['default', 'girl', 'boy'];
  * ответит база, иначе розовое приложение открывалось бы тёмной вспышкой.
  */
 function applyTheme(name) {
-  const theme = THEMES.includes(name) ? name : 'default';
+  // Тёмное «обычное» оформление убрано: приложение открывают в роддоме и
+  // ночью у кроватки, и светлая тема здесь единственная, которую доводили
+  // до ума. Старое значение из настроек и из папки читается как «девочка».
+  const theme = THEMES.includes(name) ? name : 'girl';
   const root = document.documentElement;
-  if (theme === 'default') delete root.dataset.theme;
-  else root.dataset.theme = theme;
+  root.dataset.theme = theme;
 
   // Цвета не повторяем — спрашиваем у темы, которую только что включили.
   const css = getComputedStyle(root);
@@ -1263,7 +1265,7 @@ function applyTheme(name) {
 }
 
 function renderThemeCard() {
-  const active = THEMES.includes(state.cfg.theme) ? state.cfg.theme : 'default';
+  const active = THEMES.includes(state.cfg.theme) ? state.cfg.theme : 'girl';
   for (const btn of $('set-theme').querySelectorAll('.theme-opt')) {
     btn.setAttribute('aria-pressed', String(btn.dataset.theme === active));
   }
@@ -1674,6 +1676,13 @@ async function boot() {
   }
 
   state.cfg = await settings.all();
+  // Тёмное оформление убрано: у тех, кто на нём сидел, в настройках (и в
+  // config.json в папке) осталось его имя. Переписываем один раз, иначе
+  // второму родителю так и уезжало бы значение, которого больше нет.
+  if (!THEMES.includes(state.cfg.theme)) {
+    await settings.set('theme', 'girl');
+    state.cfg = await settings.all();
+  }
   applyTheme(state.cfg.theme);
 
   // Настройка проходится один раз. Дальше приложение открывается офлайн:

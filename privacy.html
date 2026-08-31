@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <title>Политика конфиденциальности — TimelapseBaby</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#12100E">
+<meta name="theme-color" content="#FFF6F9">
 <meta name="description" content="Политика конфиденциальности приложения «TimelapseBaby»: какие данные оно использует, где их хранит и как их удалить.">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>
   :root {
-    --bg: #12100E; --surface: #1C1917; --line: #332E2A;
-    --text: #F5EFE7; --muted: #9A918A; --accent: #E8845C;
+    /* Те же цвета, что и у приложения: тёмного оформления в нём больше нет. */
+    --bg: #FFF6F9; --surface: #FFFFFF; --line: #F6D8E5;
+    --text: #432935; --muted: #8B5F71; --accent: #C9316F;
   }
   * { box-sizing: border-box; }
   body {
@@ -22,7 +23,7 @@
   h1 { font-size: 27px; font-weight: 680; letter-spacing: -0.02em; margin: 0 0 6px; }
   h2 { font-size: 18px; font-weight: 620; margin: 34px 0 10px; letter-spacing: -0.01em; }
   h3 { font-size: 15px; font-weight: 600; margin: 22px 0 8px; color: var(--muted); }
-  p, li { color: #D9D1C8; }
+  p, li { color: var(--text); }
   .updated { color: var(--muted); font-size: 14px; margin: 0 0 6px; }
   .lede { color: var(--muted); font-size: 17px; line-height: 1.55; margin: 18px 0 0; }
   ul { padding-left: 20px; }
@@ -47,11 +48,11 @@
 <body>
 
 <h1>Политика конфиденциальности</h1>
-<p class="updated">Приложение «TimelapseBaby» · обновлено 28 августа 2026</p>
+<p class="updated">Приложение «TimelapseBaby» · обновлено 31 августа 2026</p>
 
 <p class="lede">Короткая версия: у приложения нет сервера. Ваши фотографии
-хранятся на вашем телефоне и в папке вашего Google Диска. Автор приложения
-доступа к ним не имеет и получить его не может.</p>
+лежат только в папке вашего Google Диска — на телефоне они не сохраняются
+вовсе. Автор приложения доступа к ним не имеет и получить его не может.</p>
 
 <h2>Что это за приложение</h2>
 <p>«TimelapseBaby» — веб-приложение, которое помогает снимать по одной фотографии
@@ -83,10 +84,12 @@
 
 <h2>Где хранятся данные</h2>
 <ul>
-  <li><strong>На вашем устройстве.</strong> Фотографии, комментарии, настройки
-    и токен доступа Google лежат в хранилище браузера (IndexedDB и
-    localStorage). Они не покидают устройство, кроме синхронизации с вашим
-    Диском.</li>
+  <li><strong>На вашем устройстве.</strong> Опись альбома (даты, комментарии,
+    разметка глаз), настройки и токен доступа Google лежат в хранилище
+    браузера (IndexedDB и localStorage). Сами фотографии там не хранятся:
+    снимок загружается из папки, когда его показывают или собирают в видео,
+    живёт в памяти вкладки и исчезает вместе с ней. На устройстве файл
+    остаётся только если вы сами скачали архив или видео.</li>
   <li><strong>В вашем Google Диске.</strong> В папке, которую приложение создаёт
     при первом входе, — обычные файлы JPEG, текстовые комментарии и файл
     настроек <code>config.json</code>. Папка принадлежит вам; вы решаете, кому
@@ -148,7 +151,7 @@ issues в репозитории проекта</a>. Исходный код о�
 
 <div class="en" lang="en">
 <h1>Privacy Policy</h1>
-<p class="updated">“Every Day” photo app · updated 28 August 2026</p>
+<p class="updated">“Every Day” photo app · updated 31 August 2026</p>
 
 <p class="lede">Short version: this app has no server. Your photos stay on your
 own device and in a folder in your own Google Drive. The author of the app has
@@ -178,8 +181,12 @@ Drive, with your explicit permission.</p>
 
 <h2>Where data is stored</h2>
 <ul>
-  <li><strong>On your device</strong> — photos, notes, settings and the Google
-    access token live in browser storage (IndexedDB and localStorage).</li>
+  <li><strong>On your device</strong> — the album index (dates, notes, eye
+    marks), settings and the Google access token live in browser storage
+    (IndexedDB and localStorage). Photos are not stored on the device: each
+    one is fetched from the folder when shown or rendered into a video, kept
+    in the tab's memory and dropped with it. A file stays on the device only
+    if you download an archive or a video yourself.</li>
   <li><strong>In your Google Drive</strong> — plain JPEG files, plain-text notes
     and a <code>config.json</code> settings file, inside a folder the app
     creates on first sign-in. The folder is yours; you decide who may access

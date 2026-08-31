@@ -561,7 +561,6 @@ body.has-conn { --conn-h: 37px; }
   -webkit-mask: center/contain no-repeat var(--glyph);
           mask: center/contain no-repeat var(--glyph);
 }
-.swatch-plain { background: linear-gradient(145deg, #E8845C, #7A4632); }
 .swatch-girl  { background: linear-gradient(145deg, #F58FB6, #C9316F); --glyph: var(--art-heart); }
 .swatch-boy   { background: linear-gradient(145deg, #7CC0F0, #2276C0); --glyph: var(--art-star); }
 

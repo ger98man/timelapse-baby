@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <title>TimelapseBaby</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#12100E">
+<meta name="theme-color" content="#FFF6F9">
 <meta name="description" content="Ежедневное фото, календарь и таймлапс — приватно, на вашем телефоне.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="TimelapseBaby">
 <link rel="stylesheet" href="styles.css">
 <script>
@@ -22,8 +22,10 @@
 (function () {
   var name;
   try { name = localStorage.getItem('theme'); } catch (e) { /* приватный режим */ }
-  if (!name || name === 'default') return;
-  document.documentElement.dataset.theme = name;
+  // «default» — имя убранного тёмного оформления: у тех, кто сидел на нём,
+  // в localStorage оно ещё лежит.
+  document.documentElement.dataset.theme =
+    (name === 'girl' || name === 'boy') ? name : 'girl';
   var css = getComputedStyle(document.documentElement);
   var meta = function (which, value) {
     var el = document.querySelector('meta[name="' + which + '"]');
@@ -396,10 +398,7 @@
       <div class="card">
         <h2>Оформление</h2>
         <div class="themes" id="set-theme">
-          <button class="theme-opt" data-theme="default" aria-pressed="true">
-            <span class="swatch swatch-plain"></span>Обычное
-          </button>
-          <button class="theme-opt" data-theme="girl" aria-pressed="false">
+          <button class="theme-opt" data-theme="girl" aria-pressed="true">
             <span class="swatch swatch-girl"></span>Для девочки
           </button>
           <button class="theme-opt" data-theme="boy" aria-pressed="false">
