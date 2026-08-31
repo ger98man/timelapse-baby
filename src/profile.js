@@ -42,9 +42,26 @@ function findConfig(files) {
     (f.appProperties && f.appProperties.kind === 'config') || f.name === CONFIG_NAME);
 }
 
+/**
+ * Тот же config.json, но с запасным путём: если в описи по метке его нет,
+ * смотрим прямо в подключённой папке. Опись строится по метке приложения, а
+ * в общей папке файл мог оказаться без неё — и тогда второго родителя зря
+ * просили бы ввести имя и дату, которые лежат в двух шагах от него.
+ */
+async function locateConfig(drive, files) {
+  const tagged = findConfig(files);
+  if (tagged) return tagged;
+  if (typeof drive.findInRoot !== 'function') return null;
+  try {
+    return await drive.findInRoot(await settings.get('driveFolderId'), CONFIG_NAME);
+  } catch {
+    return null;                      // нет доступа или сети — не беда
+  }
+}
+
 /** Читает config.json из папки в локальные настройки. */
 export async function pullProfile(drive, files) {
-  const file = findConfig(files);
+  const file = await locateConfig(drive, files);
   if (!file) return null;
   let remote = null;
   try {
@@ -99,7 +116,11 @@ export function countRemoteDays(files) {
 /** Профиль до всякой загрузки — нужен онбордингу сразу после входа. */
 export async function fetchProfile(drive, files = null) {
   const list = files || await drive.listDayFiles();
-  const file = findConfig(list);
+  const file = await locateConfig(drive, list);
+  // Указатель на файл настроек привязан к папке, а мастер папку как раз и
+  // меняет. Без сброса запись ушла бы в config.json прошлой папки — и в новой
+  // настройки не появились бы вовсе.
+  await settings.set('profileFileId', file ? file.id : null);
   if (!file) return null;
   try {
     return JSON.parse(await (await drive.download(file.id)).text());

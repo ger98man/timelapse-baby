@@ -276,6 +276,23 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return f.webViewLink;
   }
 
+  /**
+   * Ищет файл прямо в папке — по родителю, а не по метке приложения.
+   *
+   * Метку ставит только наш код, а config.json в общей папке мог появиться
+   * иначе: его правили руками или клали туда другой копией. Для второго
+   * родителя это разница между «всё уже настроено» и «введите имя заново».
+   */
+  async function findInRoot(rootId, name) {
+    if (!rootId) return null;
+    const found = await list(q([
+      `'${rootId}' in parents`,
+      `name='${name}'`,
+      'trashed=false',
+    ]), 'files(id,name,appProperties),nextPageToken');
+    return found[0] || null;
+  }
+
   /** Помечает выбранную через окно Google папку как корневую для приложения. */
   async function adoptRoot(folderId) {
     await call(`${API}/files/${folderId}`, {
@@ -288,6 +305,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, download, trash, untrash, folderLink, usage,
+    listDayFiles, findInRoot, download, trash, untrash, folderLink, usage,
   };
 }

@@ -11,7 +11,7 @@ import { GOOGLE, configured, pickerReady } from '../config.js';
 import * as G from './google.js';
 import { createDrive, rootName } from './drive.js';
 import { pickFolder } from './picker.js';
-import { fetchProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
+import { fetchProfile, pushProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
 import * as D from './dates.js';
 
 const $ = id => document.getElementById(id);
@@ -53,6 +53,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       folderId: cfg.driveFolderId,
       folderName: cfg.driveFolderName || GOOGLE.folderName,
       remoteDays: 0,
+      remoteProfile: false,
     };
 
     // В мастере токен просим интерактивно: человек прямо сейчас у экрана и
@@ -146,8 +147,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       $('wiz-folder-name').textContent = name;
       $('wiz-folder-ok').classList.remove('hidden');
       // Выход есть всегда, а не только когда папку не нашли: приложение могло
-      // наткнуться на старую свою папку, а человек пришёл в общую.
+      // наткнуться на старую свою папку, а человек пришёл в общую — или
+      // наоборот, подключился к чужой, а хочет собственный альбом.
       $('wiz-folder-other').classList.toggle('hidden', !pickerReady());
+      resetNewFolder();
       setNext('Дальше', true);
 
       // В этой же папке лежат и настройки, и вся история. Если они там
@@ -155,6 +158,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       const files = await drive.listDayFiles();
       state.remoteDays = countRemoteDays(files);
       const remote = await fetchProfile(drive, files);
+      state.remoteProfile = Boolean(remote && remote.birthDate);
       if (remote && remote.birthDate) {
         const patch = {};
         for (const key of PROFILE_KEYS) {
@@ -192,6 +196,33 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           'А если снимать уже начал второй родитель — подключитесь к его папке, ' +
           'иначе вы будете снимать в разные альбомы. Папки подписаны почтой ' +
           'владельца, так что свою и общую легко различить.';
+      }
+    }
+
+    /** Возвращает кнопку «завести свою» в исходное, неподтверждённое состояние. */
+    function resetNewFolder() {
+      const b = $('wiz-folder-new');
+      delete b.dataset.sure;
+      b.textContent = 'Завести свою папку';
+    }
+
+    /**
+     * Заведение собственной папки. Одно и то же и для «я первый», и для «эта
+     * папка не та, хочу свою», поэтому живёт одной функцией.
+     */
+    async function createOwnFolder(button) {
+      const err = $('wiz-folder-error');
+      err.textContent = '';
+      button.disabled = true;
+      try {
+        const email = await settings.get('driveEmail');
+        const root = await drive.createRoot(rootName(GOOGLE.folderName, email));
+        await useFolder(root);
+        onToast(`Папка «${root.name}» создана`);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось создать папку';
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -364,21 +395,22 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       await enter.signin();
     };
 
-    $('wiz-folder-create').onclick = async () => {
-      const err = $('wiz-folder-error');
-      const b = $('wiz-folder-create');
-      err.textContent = '';
-      b.disabled = true;
-      try {
-        const email = await settings.get('driveEmail');
-        const root = await drive.createRoot(rootName(GOOGLE.folderName, email));
-        await useFolder(root);
-        onToast(`Папка «${root.name}» создана`);
-      } catch (e) {
-        err.textContent = e.message || 'Не удалось создать папку';
-      } finally {
-        b.disabled = false;
+    $('wiz-folder-create').onclick = () => createOwnFolder($('wiz-folder-create'));
+
+    // Завести свою поверх уже подключённой можно, но одним касанием — только
+    // пока переключать нечего. Если в текущей папке уже лежат дни, они в ней
+    // и останутся, и человек должен это увидеть до того, как нажмёт.
+    $('wiz-folder-new').onclick = () => {
+      const b = $('wiz-folder-new');
+      if (state.remoteDays && !b.dataset.sure) {
+        b.dataset.sure = '1';
+        b.textContent = 'Всё равно завести новую';
+        $('wiz-folder-error').textContent =
+          `В текущей папке ${state.remoteDays} дней — они останутся в ней.`;
+        return;
       }
+      resetNewFolder();
+      return createOwnFolder(b);
     };
 
     $('wiz-pick-folder').onclick = connectToShared;
@@ -398,6 +430,18 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     async function finish() {
       await settings.set('onboardingDone', true);
+
+      // Имя и дату второй родитель читает из config.json в папке — значит, тот,
+      // кто завёл альбом, должен его туда положить. Раньше файл появлялся
+      // только после первого захода в настройки, и до тех пор подключившийся
+      // к общей папке видел пустой экран «Про кого снимаем».
+      const c = await settings.all();
+      if (!state.remoteProfile && c.driveFolderId && c.birthDate) {
+        try {
+          await pushProfile(drive);
+        } catch { /* нет сети — уедет при первой правке настроек */ }
+      }
+
       $('wizard').classList.add('hidden');
       resolve();
     }

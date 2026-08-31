@@ -93,6 +93,11 @@ function fakeDrive() {
       f.modifiedTime = tick();
       return { id, modifiedTime: f.modifiedTime };
     },
+    // Поиск прямо в папке: приложение так добирается до config.json, когда
+    // на нём нет метки — например, в общей папке второго родителя.
+    async findInRoot(rootId, name) {
+      return [...files.values()].find(f => !f.trashed && f.name === name) || null;
+    },
     listCalls: 0,
     async listDayFiles() {
       drive.listCalls++;

@@ -305,6 +305,7 @@ async function runSync() {
     if (res.changed) parts.push(`обновлено: ${res.changed}`);
     if (res.dropped) parts.push(`удалено: ${res.dropped}`);
     toast(parts.length ? parts.join(', ') : 'Всё уже на месте');
+    await ensureSharedProfile();
     state.cfg = await settings.all();
     applyTheme(state.cfg.theme);
     freeUrls();
@@ -350,10 +351,26 @@ function applyOnlineState() {
 }
 
 /** Тихая попытка после съёмки: получилось — хорошо, нет — не мешаем. */
+/**
+ * Кладёт config.json в папку, если его там ещё нет.
+ *
+ * Второй родитель читает имя и дату оттуда, а до сих пор файл появлялся
+ * только у того, кто заходил в настройки и что-нибудь менял. Пустой экран
+ * «Про кого снимаем» у подключившегося к общей папке — как раз этот случай.
+ * profileFileId проставляет чтение описи: пусто — значит, в папке файла нет.
+ */
+async function ensureSharedProfile() {
+  const c = await settings.all();
+  if (!c.birthDate || c.profileFileId || !c.driveFolderId || !navigator.onLine) return;
+  try { await pushProfile(drive()); }
+  catch { /* не вышло сейчас — попробуем при следующем обновлении */ }
+}
+
 function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
   if (!navigator.onLine) return;
   store.refresh(drive())
+    .then(ensureSharedProfile)
     .then(() => settings.all())
     .then(c => {
       state.cfg = c;
