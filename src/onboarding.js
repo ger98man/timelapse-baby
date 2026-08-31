@@ -110,11 +110,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       b.textContent = label;
       b.disabled = !enabled;
     }
-    function setSkip(label) {
-      const b = $('wiz-skip');
-      b.classList.toggle('hidden', !label);
-      if (label) b.textContent = label;
-    }
 
     /**
      * Папки нет — спрашиваем, кто пришёл. Заводить её молча нельзя: у второго
@@ -179,7 +174,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         const ready = configured();
         $('wiz-not-configured').classList.toggle('hidden', ready);
         setNext(ready ? 'Начать' : 'Приложение не настроено', ready);
-        setSkip(null);
       },
 
       async signin() {
@@ -197,13 +191,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // ведёт только он. «Дальше» нужно единственному, кто сюда вернулся
         // кнопкой «назад», уже войдя.
         setNext(has ? 'Дальше' : null);
-        setSkip(null);
       },
 
       async folder() {
         const err = $('wiz-folder-error');
         err.textContent = '';
-        setSkip(null);
         setNext(null);
         $('wiz-folder-ok').classList.add('hidden');
         $('wiz-folder-choice').classList.add('hidden');
@@ -229,7 +221,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         $('wiz-birth').value = c.birthDate || D.todayKey();
         $('wiz-baby-error').textContent = '';
         setNext('Дальше');
-        setSkip(null);
       },
 
       async install() {
@@ -239,7 +230,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // экран делает браузер, приложение о ней не знает и знать не может.
         // Две кнопки изображали выбор, которого нет.
         setNext('Дальше');
-        setSkip(null);
       },
 
       async invite() {
@@ -247,7 +237,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           ? `https://drive.google.com/drive/folders/${state.folderId}`
           : 'https://drive.google.com';
         setNext('Дальше');
-        setSkip('Снимаю один');
       },
 
       async done() {
@@ -260,7 +249,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           : `Осталось снять первый кадр. Дальше — по одному фото ${who} в день; ` +
             'приложение само посчитает дни и соберёт таймлапс, когда захотите.';
         setNext(state.remoteDays ? 'Открыть календарь' : 'Снять первое фото');
-        setSkip(null);
       },
     };
 
@@ -296,8 +284,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       if (step === 'folder' && !state.folderId) return enter.folder();
       next();
     };
-
-    $('wiz-skip').onclick = () => next();
 
     $('wiz-signin').onclick = async () => {
       const err = $('wiz-signin-error');

@@ -103,7 +103,6 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 .wiz-foot .btn { flex: 1; }
-.wiz-foot .btn-quiet { flex: none; }
 .step .cover-title { margin-top: 4px; }
 
 .facts { list-style: none; padding: 0; margin: 0 0 18px; }
@@ -159,7 +158,15 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 .steps b { color: var(--text); font-weight: 600; }
 
 /* ---- Экраны ---- */
-.screen { padding-bottom: calc(var(--tabbar) + 16px); min-height: 100vh; }
+/* Экран занимает ровно то, что осталось от полоски статуса, — не больше.
+   С min-height: 100vh любой экран оказывался на высоту этой полоски длиннее
+   окна, и пролистывать приходилось даже пустой календарь. Прокрутка нужна
+   там, где содержимое и правда не поместилось, и только там. */
+.screen {
+  padding-bottom: calc(var(--tabbar) + 16px);
+  min-height: calc(100vh - var(--conn-h, 0px));
+  min-height: calc(100dvh - var(--conn-h, 0px));
+}
 .head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 18px 20px 14px; position: sticky; top: var(--conn-h, 0px); z-index: 5;
@@ -169,6 +176,39 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 #cal-title { text-align: center; }
 .pad { padding: 0 20px; }
 .today-body { padding: 0 20px; }
+
+/* «Сегодня» умещается в экран целиком: листать здесь нечего, а «Снять» не
+   должно уезжать за нижний край — до этой кнопки тянутся, не глядя. Ужимается
+   ровно один элемент, сам кадр; всё остальное держит свой рост, потому что
+   текст, из которого выдавили строку, читается хуже, чем фото помельче.
+   «Видео» устроено иначе: там кадр важнее всего и остаётся во всю ширину,
+   а настройки под ним честно открываются прокруткой. */
+#screen-today {
+  height: calc(100vh - var(--conn-h, 0px) - var(--tabbar));
+  height: calc(100dvh - var(--conn-h, 0px) - var(--tabbar));
+  min-height: 0; padding-bottom: 0;
+  /* auto, а не hidden: в обычный экран всё умещается и полосы не будет,
+     но в альбомной ориентации кнопки должны остаться достижимыми. */
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+/* Шапка здесь не липкая: прокрутки нет, липнуть не к чему. Заодно уходят два
+   её побочных эффекта — sticky отодвигал заголовок вниз на высоту полоски
+   статуса, а градиент накрывал верхний край кадра. */
+#screen-today .head {
+  position: static; background: none;
+  padding-top: 10px; padding-bottom: 12px;
+}
+#screen-today .today-body {
+  flex: 1; min-height: 0; padding-bottom: 12px;
+  display: flex; flex-direction: column;
+}
+#screen-today .today-body > :not(#today-photo) { flex: none; }
+/* Кадр — квадрат во всю ширину, пока тот влезает, и единственный, кому можно
+   ужаться, когда не влезает. Растягиваться сверх квадрата ему нечего. */
+#screen-today #today-photo { flex: 0 1 auto; min-height: 0; }
+/* Остаток высоты забирает полоска дней — она и должна стоять у нижнего края. */
+#screen-today #streak { margin-top: auto; }
 
 .icon-btn {
   background: none; border: 0; color: var(--muted); padding: 6px;
@@ -263,6 +303,24 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 .video-slot canvas, .video-slot video { width: 100%; height: 100%; display: block; object-fit: contain; }
 
+/* Плей у дат. Коробка считается из тех же величин, что и у полей ввода
+   (padding + рамка + иконка 24px), поэтому кнопка совпадает с ними по высоте
+   без подогнанных руками чисел, а flex-end равняет её по самим полям, а не по
+   их подписям. */
+.row-dates { align-items: flex-end; }
+/* У .field снизу свои 14px, и flex-end равнял бы кнопку по краю отступа, а не
+   по самому полю. Отступ здесь лишний — ниже и так margin-top у следующей строки. */
+/* min-width: 0 — иначе поля даты упираются в собственную ширину и не дают
+   строке сжаться, выталкивая кнопку за край экрана. */
+.row-dates .field { margin-bottom: 0; min-width: 0; }
+.play-btn {
+  flex: none; padding: 12px 14px; border: 1px solid transparent;
+  border-radius: 12px; background: var(--accent); color: #fff;
+  display: grid; place-items: center; cursor: pointer;
+}
+.play-btn:active { background: var(--accent-press); }
+.play-btn[disabled] { opacity: .55; }
+
 /* ---- Карточки настроек ---- */
 .card {
   background: var(--surface); border: 1px solid var(--line);
@@ -301,7 +359,7 @@ body.has-conn { --conn-h: 37px; }
 .conn-fix[disabled] { opacity: .55; }
 
 /* На узком экране кнопка и почта важнее приписки: почему именно связи нет,
-   подробно рассказывают ворота на входе и карточка Google в «Ещё». */
+   подробно рассказывают ворота на входе и карточка Google в «Настройки». */
 @media (max-width: 430px) {
   .conn.has-fix #conn-note { display: none; }
 }

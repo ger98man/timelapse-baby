@@ -77,7 +77,7 @@ export async function ensureFolder(drive) {
   const cfg = await settings.all();
   const root = await drive.findRoot(cfg.driveFolderId);
   if (!root) {
-    throw new Error('Папка альбома не найдена. Откройте «Ещё» → «Пройти ' +
+    throw new Error('Папка альбома не найдена. Откройте «Настройки» → «Пройти ' +
       'настройку заново» и подключите её.');
   }
   const name = await drive.nameRoot(root, cfg.driveEmail);

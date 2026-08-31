@@ -256,6 +256,15 @@ function syncQuietly() {
 
 const ICON_OK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.6 4.5L19 7.5" ' +
   'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Плей и стоп для кнопки у дат: одна кнопка, два состояния — «показать» и
+// «хватит», третьего у неё нет.
+const ICON_PLAY = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
+  '<path d="M8 5.2v13.6L19 12z" fill="currentColor" stroke="currentColor" ' +
+  'stroke-width="2.4" stroke-linejoin="round"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
+  '<path d="M7.6 7.6h8.8v8.8h-8.8z" fill="currentColor" stroke="currentColor" ' +
+  'stroke-width="2.4" stroke-linejoin="round"/></svg>';
+
 const ICON_BAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" ' +
   'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>';
 
@@ -523,10 +532,9 @@ async function renderToday() {
 
   $('today-comment').value = entry ? (entry.comment || '') : '';
   applyOnlineState();
-  const hasPhoto = Boolean(entry && entry.fileId);
-  $('today-comment').disabled = $('today-comment').disabled || !hasPhoto;
-  $('today-comment').placeholder = hasPhoto
-    ? 'Что было сегодня…' : 'Сначала снимите кадр';
+  // Поле комментария приходит вместе с кадром. Подписывать пока нечего, а
+  // серое поле с «сначала снимите» занимало экран и ничего не предлагало.
+  $('today-comment').classList.toggle('hidden', !(entry && entry.fileId));
   renderStreak();
 }
 
@@ -842,6 +850,12 @@ async function videoDays() {
   return rows.filter(r => r.fileId).map(r => r.date);
 }
 
+/** Все дни альбома, у которых есть снимок. */
+async function allDays() {
+  const rows = await entries.range('0000-01-01', '9999-12-31');
+  return rows.filter(r => r.fileId).map(r => r.date);
+}
+
 /** Выровненные кадры из того, что уже лежит на телефоне. */
 async function videoFrames() {
   const out = [];
@@ -857,8 +871,8 @@ async function videoFrames() {
  * иначе не собрать. Зато человек платит за это осознанно — нажав кнопку, а не
  * открыв приложение.
  */
-async function framesForBuild() {
-  const days = await videoDays();
+async function framesForBuild(days) {
+  if (!days) days = await videoDays();
   if (!days.length) return [];
   const missing = await store.missingBodies(days);
   if (missing.length) {
@@ -889,7 +903,19 @@ async function refreshVideoInfo() {
     : 'В этом промежутке ещё нет кадров.';
   $('btn-render').disabled = !days.length;
   $('btn-preview').disabled = !days.length;
-  $('btn-frames-zip').disabled = !days.length;
+
+  // Обещать сборку там, где браузер её не умеет, нечестно: кнопка всё равно
+  // ответила бы отказом. Убираем её и объясняем, чем собрать вместо неё.
+  const canRecord = videoSupported();
+  $('btn-render').classList.toggle('hidden', !canRecord);
+  $('video-unsupported').classList.toggle('hidden', canRecord);
+}
+
+/** @param {boolean} playing Идёт ли показ: от этого вся разница в кнопке. */
+function setPlayButton(playing) {
+  const b = $('btn-preview');
+  b.innerHTML = playing ? ICON_STOP : ICON_PLAY;
+  b.setAttribute('aria-label', playing ? 'Остановить' : 'Посмотреть');
 }
 
 async function previewVideo() {
@@ -902,9 +928,9 @@ async function previewVideo() {
   const ctrl = new AbortController();
   state.previewAbort = ctrl;
 
-  $('btn-preview').textContent = 'Стоп';
+  setPlayButton(true);
   await playFrames(frames, $('video-canvas'), Number($('video-fps').value), { signal: ctrl.signal });
-  $('btn-preview').textContent = 'Посмотреть';
+  setPlayButton(false);
   if (state.previewAbort === ctrl) state.previewAbort = null;
 }
 
@@ -920,13 +946,15 @@ async function renderVideo() {
     const fps = Number($('video-fps').value);
     const { blob, ext } = await buildVideo(frames, { fps, size: state.cfg.videoSize },
       (d, t) => progressSet(d, t, 'Собираю видео'));
-    state.video = { blob, ext };
     const v = $('video-result');
     v.src = url(blob);
     v.classList.remove('hidden');
     $('video-canvas').classList.add('hidden');
-    $('btn-save-video').classList.remove('hidden');
-    toast('Готово');
+    // Кнопка обещала «скачать», а не «подождите вторую кнопку»: окно прогресса
+    // закрываем и сразу отдаём файл — иначе поверх него откроется «Поделиться».
+    progressClose();
+    const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${ext}`;
+    if (await saveBlob(blob, name) === 'downloaded') toast('Файл сохранён в «Загрузки»');
   } catch (e) {
     toast(e.message || 'Не удалось собрать видео');
   } finally {
@@ -934,9 +962,13 @@ async function renderVideo() {
   }
 }
 
-async function framesToZip() {
-  const frames = await framesForBuild();
-  if (!frames.length) return;
+/**
+ * @param {string[]} [days] Дни для выгрузки. Без них — выбранный на «Видео»
+ *   промежуток; из «Настроек» приходит весь альбом целиком.
+ */
+async function framesToZip(days) {
+  const frames = await framesForBuild(days);
+  if (!frames.length) { toast('Пока нет ни одного кадра'); return; }
   progressOpen('Пакую кадры');
   const files = frames.map((f, i) => ({
     name: `frames/${String(i + 1).padStart(4, '0')}_${f.date}.jpg`,
@@ -1102,8 +1134,6 @@ function bind() {
   for (const t of document.querySelectorAll('.tab')) {
     t.onclick = () => showScreen(t.dataset.screen);
   }
-  $('today-prev-day').onclick = () => showScreen('calendar');
-
   // фото
   let pendingDate = null;
   const pick = (date, input) => () => {
@@ -1197,17 +1227,13 @@ function bind() {
   $('video-to').onchange = refreshVideoInfo;
   $('btn-preview').onclick = () => {
     if (state.previewAbort) { state.previewAbort.abort(); state.previewAbort = null;
-      $('btn-preview').textContent = 'Посмотреть'; return; }
+      setPlayButton(false); return; }
     previewVideo();
   };
   $('btn-render').onclick = renderVideo;
-  $('btn-frames-zip').onclick = framesToZip;
-  $('btn-save-video').onclick = async () => {
-    if (!state.video) return;
-    const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${state.video.ext}`;
-    const how = await saveBlob(state.video.blob, name);
-    if (how === 'downloaded') toast('Файл сохранён в «Загрузки»');
-  };
+  // Из «Настроек» выгружается весь альбом: промежутка там не выбирают, и
+  // молча зависеть от дат на другом экране кнопка не должна.
+  $('btn-frames-zip').onclick = async () => framesToZip(await allDays());
 
   // настройки
   // Общие настройки живут в config.json в папке, поэтому уезжают туда сразу —
