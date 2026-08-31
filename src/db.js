@@ -284,15 +284,3 @@ export const settings = {
   },
 };
 
-/** Просим браузер не вытирать данные при нехватке места. */
-export async function requestPersistence() {
-  if (!navigator.storage || !navigator.storage.persist) return false;
-  if (await navigator.storage.persisted()) return true;
-  return navigator.storage.persist();
-}
-
-export async function storageEstimate() {
-  if (!navigator.storage || !navigator.storage.estimate) return null;
-  const { usage, quota } = await navigator.storage.estimate();
-  return { usage: usage || 0, quota: quota || 0 };
-}
