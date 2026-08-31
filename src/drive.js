@@ -10,6 +10,20 @@ const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
+/**
+ * День и вид файла. Обычно они лежат в метаданных приложения, но в общей папке
+ * Google их не показывает: метаданные приватны, а второму родителю выдан
+ * доступ на папку, а не на каждый файл в ней. Имя же видно всегда — и это
+ * дата, ради чего файлы так и названы.
+ */
+export function describeFile(f) {
+  const p = f.appProperties || {};
+  if (p.day) return { day: p.day, kind: p.kind || 'photo' };
+  const m = /^(\d{4}-\d{2}-\d{2})\.(jpg|txt)$/i.exec(f.name || '');
+  if (!m) return null;
+  return { day: m[1], kind: m[2].toLowerCase() === 'txt' ? 'note' : 'photo' };
+}
+
 /** Метка, по которой приложение находит свои файлы одним запросом. */
 export const TAG = 'everyday';
 
@@ -217,11 +231,19 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     };
   }
 
-  async function listDayFiles() {
-    return list(q([
+  /**
+   * Опись альбома. Обычный путь — один запрос по метке приложения; для общей
+   * папки, где метки не видно, — обход по родителям. Пусто по метке при
+   * известной папке всегда стоит перепроверить обходом: своя пустая папка
+   * ответит одним дешёвым запросом, а чужая полная — покажет своё содержимое.
+   */
+  async function listDayFiles(rootId) {
+    const tagged = await list(q([
       `appProperties has { key='${TAG}' and value='1' }`,
       'trashed=false',
     ]));
+    if (tagged.length || !rootId) return tagged;
+    return listTree(rootId);
   }
 
   /**
@@ -289,10 +311,34 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
    */
   async function listChildren(rootId) {
     if (!rootId) return [];
-    return list(q([
-      `'${rootId}' in parents`,
-      'trashed=false',
-    ]), 'files(id,name,mimeType,appProperties),nextPageToken');
+    return list(q([`'${rootId}' in parents`, 'trashed=false']));
+  }
+
+  /**
+   * Обход папки сверху вниз: корень → годы → месяцы → файлы.
+   *
+   * Своя опись строится одним запросом по метке приложения, но метка — вещь
+   * приватная: Google показывает её только тому, кому выдан доступ к самому
+   * файлу. Второму родителю доступ выдан на папку, а не на каждый снимок в
+   * ней, и запрос по метке возвращает пустоту при полной папке.
+   *
+   * Спуск по родителям от этого не зависит: раскладка альбома всего в три
+   * уровня, поэтому и запросов три — год и месяц спрашиваются пачкой.
+   */
+  async function listTree(rootId) {
+    const inAny = ids => '(' + ids.map(id => `'${id}' in parents`).join(' or ') + ')';
+    const dive = async parents => (parents.length
+      ? list(q([inAny(parents), 'trashed=false']))
+      : []);
+
+    const out = [];
+    let level = await listChildren(rootId);
+    for (let depth = 0; depth < 3 && level.length; depth++) {
+      out.push(...level.filter(f => f.mimeType !== FOLDER_MIME));
+      const folders = level.filter(f => f.mimeType === FOLDER_MIME).map(f => f.id);
+      level = await dive(folders);
+    }
+    return out;
   }
 
   /** Помечает выбранную через окно Google папку как корневую для приложения. */
@@ -307,6 +353,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, listChildren, download, trash, untrash, folderLink, usage,
+    listDayFiles, listChildren, listTree, download, trash, untrash, folderLink, usage,
   };
 }

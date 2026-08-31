@@ -99,7 +99,7 @@ function fakeDrive() {
       return [...files.values()].filter(f => !f.trashed);
     },
     listCalls: 0,
-    async listDayFiles() {
+    async listDayFiles(rootId) {
       drive.listCalls++;
       return [...files.values()].filter(f => !f.trashed).map(f => ({
         ...f,

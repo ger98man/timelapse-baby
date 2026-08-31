@@ -18,7 +18,7 @@
 import { entries, blobs, bench, settings } from './db.js';
 import { toMaster } from './img.js';
 import { renderSquareBlob } from './align.js';
-import { TAG } from './drive.js';
+import { TAG, describeFile } from './drive.js';
 import { pullProfile } from './profile.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
@@ -50,16 +50,16 @@ function sameEyes(a, b) {
 function indexRemote(files) {
   const byDay = new Map();
   for (const f of files) {
-    const p = f.appProperties || {};
-    if (!p.day) continue;
-    const slot = byDay.get(p.day) || {};
-    if (p.kind === 'note') {
+    const what = describeFile(f);
+    if (!what) continue;
+    const slot = byDay.get(what.day) || {};
+    if (what.kind === 'note') {
       slot.note = f;
-    } else if (p.kind === 'photo' || !p.kind) {
+    } else if (what.kind === 'photo') {
       // если снимков за день вдруг несколько, берём последний по времени
       if (!slot.photo || ts(f.modifiedTime) > ts(slot.photo.modifiedTime)) slot.photo = f;
     }
-    byDay.set(p.day, slot);
+    byDay.set(what.day, slot);
   }
   return byDay;
 }
@@ -103,7 +103,7 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
   const rootId = await ensureFolder(drive);
 
   onProgress(0, 1, 'Смотрю, что в папке');
-  const files = await drive.listDayFiles();
+  const files = await drive.listDayFiles(rootId);
   await pullProfile(drive, files);
 
   const cfg = await settings.all();      // настройки могли приехать из папки
@@ -238,10 +238,11 @@ function rememberThumb(day, link) {
 
 /** Добрать ссылки описью папки — один запрос на всю историю. */
 async function fillThumbs(drive) {
-  for (const f of await drive.listDayFiles()) {
-    const p = f.appProperties || {};
-    if (!p.day || p.kind === 'note') continue;
-    rememberThumb(p.day, f.thumbnailLink);
+  const rootId = await settings.get('driveFolderId');
+  for (const f of await drive.listDayFiles(rootId)) {
+    const what = describeFile(f);
+    if (!what || what.kind === 'note') continue;
+    rememberThumb(what.day, f.thumbnailLink);
   }
 }
 

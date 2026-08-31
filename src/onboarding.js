@@ -160,7 +160,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
       // В этой же папке лежат и настройки, и вся история. Если они там
       // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
-      const files = await drive.listDayFiles();
+      const files = await drive.listDayFiles(root.id);
       state.remoteDays = countRemoteDays(files);
       const remote = await fetchProfile(drive, files);
       state.remoteProfile = Boolean(remote && remote.birthDate);

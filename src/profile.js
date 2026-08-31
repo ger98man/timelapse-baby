@@ -8,6 +8,7 @@
 // только при сети, так что расходиться версиям негде.
 
 import { settings } from './db.js';
+import { describeFile } from './drive.js';
 
 export const CONFIG_NAME = 'config.json';
 
@@ -108,15 +109,15 @@ export async function pushProfile(drive) {
 export function countRemoteDays(files) {
   const days = new Set();
   for (const f of files) {
-    const p = f.appProperties;
-    if (p && p.day && (p.kind === 'photo' || !p.kind)) days.add(p.day);
+    const what = describeFile(f);
+    if (what && what.kind === 'photo') days.add(what.day);
   }
   return days.size;
 }
 
 /** Профиль до всякой загрузки — нужен онбордингу сразу после входа. */
 export async function fetchProfile(drive, files = null) {
-  const list = files || await drive.listDayFiles();
+  const list = files || await drive.listDayFiles(await settings.get('driveFolderId'));
   const file = await locateConfig(drive, list);
   // Указатель на файл настроек привязан к папке, а мастер папку как раз и
   // меняет. Без сброса запись ушла бы в config.json прошлой папки — и в новой
