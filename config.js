@@ -15,6 +15,12 @@ export const GOOGLE = {
   // API key — нужен для окна выбора общей папки (второй родитель).
   apiKey: 'AIzaSyAMuaYWqN5Lb0jx7nYAWCGBKaxl6wzdl3g',
 
+  // Номер проекта в Google Cloud — цифры до дефиса в Client ID. Без него окно
+  // выбора папки покажет её, но доступа приложению не выдаст: со скоупом
+  // drive.file Google связывает выбор с приложением именно по этому номеру.
+  // Пусто — возьмём из Client ID.
+  appId: '',
+
   // Имя папки, которую приложение создаёт в Диске при первом входе.
   folderName: 'TimelapseBaby',
 
@@ -26,3 +32,6 @@ export const GOOGLE = {
 
 export const configured = () => Boolean(GOOGLE.clientId);
 export const pickerReady = () => Boolean(GOOGLE.apiKey);
+
+/** Номер проекта: явный из настроек или выведенный из Client ID. */
+export const appId = () => GOOGLE.appId || GOOGLE.clientId.split('-')[0];

@@ -4,8 +4,13 @@
 // Со скоупом drive.file приложение не может само найти чужую папку — и это
 // правильно. Человек выбирает её руками, и только тогда Google выдаёт доступ
 // именно к ней. Один тап один раз, дальше всё работает само.
+//
+// Выдача доступа держится на двух вещах, и без любой из них выбор проходит
+// вхолостую, а первая же запись отвечает 403:
+//   setAppId — номер проекта, к которому Google привяжет доступ;
+//   вкладка «Доступные мне» — чужая папка лежит именно там, а не в «Моём Диске».
 
-import { GOOGLE } from '../config.js';
+import { GOOGLE, appId } from '../config.js';
 
 const API_SRC = 'https://apis.google.com/js/api.js';
 
@@ -39,14 +44,17 @@ export async function pickFolder(accessToken) {
   }
   const picker = await loadPicker();
 
-  return new Promise(resolve => {
-    const view = new picker.DocsView(picker.ViewId.FOLDERS)
-      .setIncludeFolders(true)
-      .setSelectFolderEnabled(true)
-      .setMimeTypes('application/vnd.google-apps.folder');
+  const folders = label => new picker.DocsView(picker.ViewId.FOLDERS)
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(true)
+    .setMimeTypes('application/vnd.google-apps.folder')
+    .setLabel(label);
 
+  return new Promise(resolve => {
     new picker.PickerBuilder()
-      .addView(view)
+      .addView(folders('Доступные мне').setOwnedByMe(false))
+      .addView(folders('Мой Диск').setOwnedByMe(true))
+      .setAppId(appId())
       .setOAuthToken(accessToken)
       .setDeveloperKey(GOOGLE.apiKey)
       .setTitle('Выберите общую папку')

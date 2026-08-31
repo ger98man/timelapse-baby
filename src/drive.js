@@ -37,6 +37,17 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
       }
       let detail = '';
       try { detail = (await res.json()).error.message; } catch { /* пустой ответ */ }
+
+      // Отдельный случай: папку выбрали, но доступ к ней приложению не выдан.
+      // Техническое «has not granted the app … access» не говорит человеку
+      // ничего, а починка ровно одна — выбрать папку заново.
+      if (res.status === 403 && /has not granted the app/.test(detail)) {
+        throw new Error(
+          'Приложению не выдан доступ к этой папке. Нажмите «Подключиться ' +
+          'к общей папке» и выберите её на вкладке «Доступные мне». ' +
+          'Если папку так и не пускает — попросите первого родителя дать ' +
+          'вам права редактора.');
+      }
       throw new Error(`Google Диск: ${res.status}${detail ? ' — ' + detail : ''}`);
     }
     throw lastError;
