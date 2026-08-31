@@ -181,9 +181,10 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
    должно уезжать за нижний край — до этой кнопки тянутся, не глядя. Ужимается
    ровно один элемент, сам кадр; всё остальное держит свой рост, потому что
    текст, из которого выдавили строку, читается хуже, чем фото помельче.
-   «Видео» устроено иначе: там кадр важнее всего и остаётся во всю ширину,
-   а настройки под ним честно открываются прокруткой. */
-#screen-today {
+   На «Видео» то же самое: кадр остаётся квадратом во всю ширину, пока тот
+   влезает, и отдаёт высоту только когда её не хватает выбору дней, скорости
+   и «Скачать видео» — до кнопки не должно приходиться доскрёбываться. */
+#screen-today, #screen-video {
   height: calc(100vh - var(--conn-h, 0px) - var(--tabbar));
   height: calc(100dvh - var(--conn-h, 0px) - var(--tabbar));
   min-height: 0; padding-bottom: 0;
@@ -195,18 +196,21 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 /* Шапка здесь не липкая: прокрутки нет, липнуть не к чему. Заодно уходят два
    её побочных эффекта — sticky отодвигал заголовок вниз на высоту полоски
    статуса, а градиент накрывал верхний край кадра. */
-#screen-today .head {
+#screen-today .head, #screen-video .head {
   position: static; background: none;
   padding-top: 10px; padding-bottom: 12px;
 }
-#screen-today .today-body {
+#screen-today .today-body, #screen-video .pad {
   flex: 1; min-height: 0; padding-bottom: 12px;
   display: flex; flex-direction: column;
 }
-#screen-today .today-body > :not(#today-photo) { flex: none; }
+#screen-today .today-body > :not(#today-photo),
+#screen-video .pad > :not(#video-preview) { flex: none; }
 /* Кадр — квадрат во всю ширину, пока тот влезает, и единственный, кому можно
    ужаться, когда не влезает. Растягиваться сверх квадрата ему нечего. */
-#screen-today #today-photo { flex: 0 1 auto; min-height: 0; }
+#screen-today #today-photo, #screen-video #video-preview {
+  flex: 0 1 auto; min-height: 0;
+}
 /* Остаток высоты забирает полоска дней — она и должна стоять у нижнего края. */
 #screen-today #streak { margin-top: auto; }
 
