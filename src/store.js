@@ -17,18 +17,17 @@
 
 import { entries, blobs, settings } from './db.js';
 import { toMaster } from './img.js';
-import { deriveFrom, thumbFrom } from './align.js';
+import { deriveFrom } from './align.js';
 import { TAG } from './drive.js';
 import { pullProfile } from './profile.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
 
 /**
- * Ссылки на миниатюры Диска. Живут пару часов и меняются с каждой описью,
- * поэтому в базе им делать нечего: там они только перезаписывали бы карточки
- * ради строки, которая всё равно протухнет.
+ * Ссылки на миниатюры для предпросмотра: живут пару часов, лежат только в
+ * памяти. На телефоне не остаётся ни самих миниатюр, ни ссылок на них.
  */
-const thumbLinks = new Map();
+const previewCache = new Map();
 
 // Разметка глаз принадлежит снимку, поэтому едет в его же метаданных
 export function eyesToProp(eyes) {
@@ -128,8 +127,6 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
     onProgress(i + 1, days.length, 'Читаю опись папки');
     if (!slot.photo) continue;
 
-    thumbLinks.set(day, slot.photo.thumbnailLink || null);
-
     const cached = await entries.get(day);
     const noteId = slot.note ? slot.note.id : null;
     const noteModified = slot.note ? slot.note.modifiedTime : null;
@@ -164,26 +161,20 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
       noteStale: Boolean(noteId) && !noteSame,
       w: contentSame ? cached.w : 0,
       h: contentSame ? cached.h : 0,
-      thumb: contentSame ? cached.thumb : null,
-      thumbFrom: contentSame ? cached.thumbFrom : null,
     };
 
     if (!contentSame) {
       await blobs.delete(day);           // снимок другой — тело устарело целиком
       if (cached) changed++; else added++;
     } else if (!eyesSame) {
-      // Разметку поправили с другого телефона: пересобрать можно на месте,
-      // если снимок уже здесь, иначе миниатюра приедет заново из Диска.
+      // Разметку поправили с другого телефона. Если снимок сейчас в памяти —
+      // пересобираем выровненный кадр на месте, иначе он соберётся при
+      // следующем показе, когда снимок и так будет загружен.
       const body = await blobs.get(day);
       if (body && body.photo) {
         const d = await deriveFrom(body.photo, eyes,
           { size: cfg.videoSize, target: cfg.eyeTarget });
         await blobs.put({ date: day, photo: body.photo, aligned: d.aligned });
-        entry.thumb = d.thumb;
-        entry.thumbFrom = 'master';
-      } else {
-        entry.thumb = null;
-        entry.thumbFrom = null;
       }
       changed++;
     } else {
@@ -198,40 +189,46 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
 }
 
 /**
- * Миниатюра для календаря. Берётся у Google готовой: она приезжает ссылкой
- * вместе с описью, весит килобайты и не требует качать оригинал.
+ * Кадры для предпросмотра — миниатюры, которые Google делает сам.
  *
- * Если миниатюры нет (Диск ещё не успел её сделать, нет сети, ссылка протухла),
- * день всё равно остаётся в календаре — просто отмеченным галочкой.
+ * Возвращаем ссылки, а не файлы: скачать миниатюру запросом нельзя — сервер
+ * картинок не отдаёт заголовок CORS, и fetch с токеном там всегда падает.
+ * Зато обычная <img> её показывает, поэтому загрузку берёт на себя тот, кто
+ * рисует, а холст просто не читают обратно в файл.
+ *
+ * День стоит десятков килобайт вместо мегабайтов, поэтому посмотреть год
+ * можно, не выкачивая год. В файл такое не годится: за настоящим видео идут
+ * оригиналы через ensureBodies.
+ *
+ * @param {string[]} dates дни по порядку
+ * @param {number} size сторона миниатюры в пикселях
+ * @returns {Promise<Array<{date:string, url:string, eyes:?Object}>>}
  */
-export async function ensureThumb(drive, date, { cfg = null, size = 400 } = {}) {
-  const entry = await entries.get(date);
-  if (!entry || !entry.fileId || entry.thumb) return entry;
-
-  let link = thumbLinks.get(date);
-  if (link === undefined) {
-    link = await drive.thumbLink(entry.fileId);
-    thumbLinks.set(date, link);
+export async function previewFrames(drive, dates, { size = 540 } = {}) {
+  const need = dates.some(d => !previewCache.has(d));
+  if (need) {
+    for (const f of await drive.listDayFiles()) {
+      const p = f.appProperties || {};
+      if (!p.day || p.kind === 'note' || !f.thumbnailLink) continue;
+      // В ссылке уже стоит запрошенный размер — подменяем на свой.
+      previewCache.set(p.day, /=s\d+/.test(f.thumbnailLink)
+        ? f.thumbnailLink.replace(/=s\d+.*$/, `=s${size}`)
+        : `${f.thumbnailLink}=s${size}`);
+    }
   }
-  if (!link) return entry;
-
-  let raw;
-  try {
-    raw = await drive.downloadThumb(link, size);
-  } catch {
-    // Ссылка живёт пару часов; протухла — спросим новую и попробуем ещё раз.
-    link = await drive.thumbLink(entry.fileId);
-    thumbLinks.set(date, link);
-    if (!link) return entry;
-    raw = await drive.downloadThumb(link, size);
+  const out = [];
+  for (const date of dates) {
+    const url = previewCache.get(date);
+    if (!url) continue;
+    const entry = await entries.get(date);
+    out.push({ date, url, eyes: entry ? entry.eyes : null });
   }
-  if (!raw) return entry;
+  return out;
+}
 
-  const conf = cfg || await settings.all();
-  entry.thumb = await thumbFrom(raw, entry.eyes, conf.eyeTarget);
-  entry.thumbFrom = 'drive';
-  await entries.put(entry);
-  return entry;
+/** Выбросить предпросмотр из памяти — как и всё остальное, он временный. */
+export function clearPreview() {
+  previewCache.clear();
 }
 
 /**
@@ -270,12 +267,10 @@ export async function ensureBody(drive, date, { cfg = null } = {}) {
     dirty = true;
   }
 
-  if (!body.aligned || !entry.thumb || entry.thumbFrom !== 'master') {
+  if (!body.aligned) {
     const d = await deriveFrom(body.photo, entry.eyes,
       { size: conf.videoSize, target: conf.eyeTarget });
     body.aligned = d.aligned;
-    entry.thumb = d.thumb;
-    entry.thumbFrom = 'master';
     dirty = true;
   }
 
@@ -350,10 +345,7 @@ export async function putPhoto(drive, date, file) {
     noteModified: was ? was.noteModified || null : null,
     noteStale: false,
     w, h,
-    thumb: derived.thumb,
-    thumbFrom: 'master',
   };
-  thumbLinks.delete(date);
   await blobs.put({ date, photo: blob, aligned: derived.aligned });
   await entries.put(entry);
   return entry;
@@ -378,8 +370,6 @@ export async function putEyes(drive, date, eyes) {
   fresh.modifiedTime = res.modifiedTime;
   const derived = await deriveFrom(loaded.body.photo, eyes,
     { size: cfg.videoSize, target: cfg.eyeTarget });
-  fresh.thumb = derived.thumb;
-  fresh.thumbFrom = 'master';
   await blobs.put({ date, photo: loaded.body.photo, aligned: derived.aligned });
   await entries.put(fresh);
   return fresh;
@@ -422,5 +412,4 @@ export async function removeDay(drive, date) {
   }
   await entries.delete(date);
   await blobs.delete(date);
-  thumbLinks.delete(date);
 }

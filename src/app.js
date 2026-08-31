@@ -1,15 +1,15 @@
-import { entries, blobs, settings, requestPersistence, storageEstimate, DB_NAME } from './db.js';
+import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { formatBytes } from './img.js';
-import { deriveFrom } from './align.js';
-import { buildVideo, playFrames, videoSupported, pickMime } from './video.js';
+import { deriveFrom, drawAligned } from './align.js';
+import { buildVideo, videoSupported, pickMime } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
 import { createZip } from './zip.js';
-import { GOOGLE, configured } from '../config.js';
+import { GOOGLE, configured, pickerReady } from '../config.js';
 import { runOnboarding } from './onboarding.js';
 import * as G from './google.js';
-import { createDrive } from './drive.js';
+import { createDrive, rootName } from './drive.js';
 import * as store from './store.js';
 import { pickFolder } from './picker.js';
 
@@ -21,7 +21,6 @@ const state = {
   urls: [],          // объектные URL текущего экрана, чтобы не течь памятью
   align: null,       // контекст оверлея разметки глаз
   video: null,       // последнее собранное видео
-  previewAbort: null,
   conn: { status: 'unknown', email: '', note: '' },   // связь с Google
   connAt: 0,         // когда её проверяли в последний раз
 };
@@ -723,11 +722,9 @@ async function renderCalendar() {
     cell.dataset.date = key;
     if (key === today) cell.classList.add('is-today');
     if (key > today) cell.classList.add('future');
-    if (entry && entry.fileId) {
-      cell.classList.add('has-photo');
-      if (entry.thumb) paintThumb(cell, entry.thumb);
-      else cell.classList.add('no-thumb');   // день снят, миниатюра ещё едет
-    }
+    // Снимки на телефоне не хранятся, а качать по картинке на каждый день
+    // месяца — это мегабайты ради разглядывания клеток 40×40. Галочка.
+    if (entry && entry.fileId) cell.classList.add('has-photo', 'no-thumb');
     const num = document.createElement('span');
     num.className = 'num';
     num.textContent = d;
@@ -741,44 +738,6 @@ async function renderCalendar() {
   $('cal-stats').textContent =
     `${inMonth} ${D.plural(inMonth, 'день', 'дня', 'дней')} в этом месяце · ${total} всего`;
 
-  loadMonthThumbs(rows.filter(r => r.fileId && !r.thumb).map(r => r.date));
-}
-
-/** Миниатюра в клетке календаря: картинка ложится под номер дня. */
-function paintThumb(cell, blob) {
-  cell.classList.remove('no-thumb');
-  const img = document.createElement('img');
-  img.src = url(blob);
-  img.alt = '';
-  cell.insertBefore(img, cell.firstChild);
-}
-
-/**
- * Миниатюры видимого месяца — единственное, что календарь вообще качает.
- * Их делает сам Google, поэтому день стоит килобайтов, а не мегабайтов, и
- * платим мы только за те месяцы, которые открыли.
- *
- * Ушли на другой месяц — прошлая очередь бросается: догружать то, чего уже
- * никто не видит, значит тратить чужой трафик впустую.
- */
-let thumbRun = 0;
-async function loadMonthThumbs(days) {
-  const token = ++thumbRun;
-  if (!days.length || !canPull()) return;
-  const d = drive();
-  for (const date of days) {
-    if (token !== thumbRun) return;
-    let entry;
-    try {
-      entry = await store.ensureThumb(d, date, { cfg: state.cfg });
-    } catch {
-      continue;         // нет миниатюры — в клетке останется галочка
-    }
-    if (token !== thumbRun) return;
-    if (!entry || !entry.thumb) continue;
-    const cell = $('cal-grid').querySelector(`[data-date="${date}"]`);
-    if (cell) paintThumb(cell, entry.thumb);
-  }
 }
 
 // --- карточка дня -----------------------------------------------------------
@@ -1009,12 +968,10 @@ async function framesForBuild(days) {
 
 async function refreshVideoInfo() {
   const days = await videoDays();
-  const missing = days.length ? await store.missingBodies(days) : [];
   const fps = Number($('video-fps').value);
   const secs = days.length / fps;
-  const note = missing.length ? ` · ${missing.length} ещё не загружено` : '';
   $('video-info').textContent = days.length
-    ? `${days.length} ${D.plural(days.length, 'кадр', 'кадра', 'кадров')} · примерно ${secs.toFixed(1)} с${note}`
+    ? `${days.length} ${D.plural(days.length, 'кадр', 'кадра', 'кадров')} · примерно ${secs.toFixed(1)} с`
     : 'В этом промежутке ещё нет кадров.';
   $('btn-render').disabled = !days.length;
   $('btn-preview').disabled = !days.length;
@@ -1033,20 +990,143 @@ function setPlayButton(playing) {
   b.setAttribute('aria-label', playing ? 'Остановить' : 'Посмотреть');
 }
 
+/**
+ * Проигрыватель предпросмотра.
+ *
+ * Кадры — миниатюры из Диска, поэтому весь ряд помещается в памяти и можно
+ * не «проигрывать поток», а просто рисовать нужный кадр: отсюда и пауза, и
+ * перемотка в любое место, чего у прежнего показа не было.
+ */
+const player = {
+  frames: [],        // [{date, blob}] по порядку
+  images: new Map(),  // date -> HTMLImageElement, декодируем по требованию
+  i: 0,
+  playing: false,
+  timer: null,
+  key: '',           // какой промежуток загружен: сменился — перезагружаем
+};
+
+function playerStop() {
+  player.playing = false;
+  clearTimeout(player.timer);
+  player.timer = null;
+  setPlayButton(false);
+  setOverlay('play');
+}
+
+/**
+ * Значок поверх кадра. Во время показа над видео не должно быть ничего:
+ * таймлапс идёт секунды, и кружок посреди лица успевает только помешать.
+ * @param {?string} kind 'play' — приглашение нажать; null — чистый кадр
+ */
+function setOverlay(kind) {
+  $('video-overlay').className = 'video-overlay' + (kind ? ' ' + kind : ' hidden');
+}
+
+/**
+ * Миниатюру грузим обычной картинкой: скачать её запросом нельзя — сервер
+ * картинок Google не отдаёт заголовок CORS. Рисовать это на холсте можно,
+ * читать холст обратно — нет, но предпросмотру и не нужно: файл собирается
+ * из оригиналов, а не отсюда.
+ */
+function imageFor(frame) {
+  let img = player.images.get(frame.date);
+  if (img) return img;
+  img = new Image();
+  img.src = frame.url;
+  player.images.set(frame.date, img);
+  return img;
+}
+
+async function drawFrame(i) {
+  const frame = player.frames[i];
+  if (!frame) return;
+  player.i = i;
+  const canvas = $('video-canvas');
+  const ctx = canvas.getContext('2d');
+  const img = imageFor(frame);
+  if (!img.complete) {
+    await new Promise(res => { img.onload = res; img.onerror = res; });
+  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (img.naturalWidth) {
+    // Тот же расчёт, что и у настоящего кадра: глаза встают на своё место,
+    // поэтому предпросмотр показывает именно то, что окажется в файле.
+    drawAligned(ctx, img, img.naturalWidth, img.naturalHeight,
+      canvas.width, frame.eyes, state.cfg.eyeTarget);
+  }
+  $('video-seek').value = String(i);
+  $('video-pos').textContent = D.formatLong(frame.date).replace(/ \d{4}$/, '');
+  // Следующий кадр начинаем грузить заранее: иначе на первом показе темп плывёт.
+  if (player.frames[i + 1]) imageFor(player.frames[i + 1]);
+}
+
+function playerPlay() {
+  if (!player.frames.length) return;
+  // Досмотрели до конца — следующий пуск начинает сначала.
+  if (player.i >= player.frames.length - 1) player.i = 0;
+  player.playing = true;
+  setPlayButton(true);
+  setOverlay(null);
+  const step = async () => {
+    if (!player.playing) return;
+    await drawFrame(player.i);
+    if (player.i >= player.frames.length - 1) { playerStop(); return; }
+    player.timer = setTimeout(() => { player.i++; step(); },
+      1000 / Number($('video-fps').value));
+  };
+  step();
+}
+
+function playerToggle() {
+  if (!player.frames.length) return previewVideo();
+  if (player.playing) playerStop(); else playerPlay();
+}
+
+/**
+ * Предпросмотр идёт по миниатюрам Google: посмотреть год так стоит мегабайта
+ * вместо сотни. Оригиналы качаются только за настоящим файлом — там качество
+ * решает, здесь достаточно узнать лицо в квадрате 400×400.
+ */
 async function previewVideo() {
-  const frames = await framesForBuild();
-  if (!frames.length) return;
+  const days = await videoDays();
+  if (!days.length) return;
+  if (!canPull()) { toast('Нет сети — предпросмотр не из чего собрать'); return; }
+
+  const key = days.join(',');
+  if (key !== player.key) {
+    let frames = [];
+    try {
+      frames = await store.previewFrames(drive(), days);
+    } catch (e) {
+      toast(e.message || 'Не удалось получить кадры для предпросмотра');
+    }
+    if (!frames.length) { toast('Кадры для предпросмотра не приехали'); return; }
+    player.frames = frames;
+    player.images.clear();
+    player.key = key;
+    player.i = 0;
+  }
+
   $('video-result').classList.add('hidden');
   $('video-canvas').classList.remove('hidden');
+  $('video-track').classList.remove('hidden');
+  $('video-seek').max = String(player.frames.length - 1);
+  await drawFrame(player.i);
+  playerPlay();
+}
 
-  if (state.previewAbort) state.previewAbort.abort();
-  const ctrl = new AbortController();
-  state.previewAbort = ctrl;
-
-  setPlayButton(true);
-  await playFrames(frames, $('video-canvas'), Number($('video-fps').value), { signal: ctrl.signal });
-  setPlayButton(false);
-  if (state.previewAbort === ctrl) state.previewAbort = null;
+/** Промежуток или скорость поменялись — показанное больше не про них. */
+function resetPlayer() {
+  playerStop();
+  player.frames = [];
+  player.images.clear();
+  player.key = '';
+  player.i = 0;
+  $('video-track').classList.add('hidden');
+  $('video-overlay').classList.add('hidden');
+  const canvas = $('video-canvas');
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 }
 
 /**
@@ -1075,13 +1155,12 @@ async function confirmRender(days) {
 
   return ask({
     title: 'Собрать и скачать видео',
-    text: 'Видео соберётся прямо здесь, на телефоне: кадры проиграются ' +
-      'по одному и запишутся в файл.' + (missing.length
-        ? ' Часть кадров сначала скачается из папки в Google.'
-        : ' Интернет и Google для этого не нужны.'),
+    text: 'В отличие от предпросмотра, файл собирается из настоящих ' +
+      'фотографий: они скачаются из папки, проиграются по одной и запишутся ' +
+      'в видео. На телефоне ничего из этого не останется.',
     items: [
       ['Кадров', `${days.length} · видео примерно на ${secs.toFixed(1)} с` +
-        (missing.length ? ` · ${missing.length} ещё не на телефоне` : '')],
+        (missing.length ? ` · скачаю ${missing.length} из папки` : '')],
       ['Файл', `${name}, примерно ${formatBytes(bytes)}`],
       ['Куда', shares
         ? 'телефон спросит сам — можно сохранить или сразу отправить'
@@ -1120,6 +1199,9 @@ async function renderVideo() {
     progressClose();
     const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${ext}`;
     if (await saveBlob(blob, name) === 'downloaded') toast('Файл сохранён в «Загрузки»');
+    // Оригиналы качались только ради этого файла — держать в памяти
+    // мегабайты после того, как он готов, незачем.
+    await blobs.clear();
   } catch (e) {
     toast(e.message || 'Не удалось собрать видео');
   } finally {
@@ -1262,6 +1344,11 @@ async function initVideoScreen() {
     if (!$('video-from').value) $('video-from').value = dates[0];
     if (!$('video-to').value) $('video-to').value = dates[dates.length - 1];
   }
+  // Скорость — общая настройка: она уезжает в config.json, значит второй
+  // родитель видит тот же темп. Раньше ползунок жил сам по себе и после
+  // перезапуска возвращался к тому, что подставил браузер.
+  $('video-fps').value = String(state.cfg.videoFps);
+  $('fps-label').textContent = String(state.cfg.videoFps);
   await refreshVideoInfo();
 }
 
@@ -1360,8 +1447,15 @@ function bind() {
 
   // видео
   $('video-fps').oninput = e => { $('fps-label').textContent = e.target.value; refreshVideoInfo(); };
-  $('video-from').onchange = refreshVideoInfo;
-  $('video-to').onchange = refreshVideoInfo;
+  $('video-fps').onchange = async e => {
+    await settings.set('videoFps', Number(e.target.value));
+    state.cfg = await settings.all();
+    await saveShared();
+  };
+  // Промежуток сменился — показанный ряд кадров уже не про него.
+  const onRange = () => { resetPlayer(); refreshVideoInfo(); };
+  $('video-from').onchange = onRange;
+  $('video-to').onchange = onRange;
   // Календарь по нажатию на поле открывает браузер сам, но не везде и не
   // всегда: где-то нажатие лишь ставит курсор в «день». Подстраховываемся —
   // если пикер уже открылся, повторный вызов просто бросит исключение.
@@ -1371,10 +1465,23 @@ function bind() {
       try { e.currentTarget.showPicker(); } catch { /* уже открыт */ }
     };
   }
-  $('btn-preview').onclick = () => {
-    if (state.previewAbort) { state.previewAbort.abort(); state.previewAbort = null;
-      setPlayButton(false); return; }
-    previewVideo();
+  $('btn-preview').onclick = playerToggle;
+
+  // Нажатие по самому кадру — то же самое: большая мишень вместо кнопки.
+  $('video-preview').onclick = e => {
+    if (e.target.closest('#video-result')) return;   // у видео свои элементы
+    playerToggle();
+  };
+  $('video-preview').onkeydown = e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    playerToggle();
+  };
+
+  // Перемотка: тянут ползунок — показ встаёт на паузу и слушается пальца.
+  $('video-seek').oninput = e => {
+    playerStop();
+    drawFrame(Number(e.target.value));
   };
   $('btn-render').onclick = renderVideo;
   // Из «Настроек» выгружается весь альбом: промежутка там не выбирают, и

@@ -250,22 +250,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
    * Ссылка короткоживущая и на чужом хосте, поэтому запрос идёт с токеном и
    * без ретраев: протухла — обновим список файлов и получим новую.
    */
-  async function downloadThumb(link, size = 400) {
-    if (!link) return null;
-    // ...=s220 в конце — запрошенный размер; просим свой
-    const url = /=s\d+/.test(link) ? link.replace(/=s\d+.*$/, `=s${size}`) : `${link}=s${size}`;
-    const token = await getToken();
-    const res = await fetchImpl(url, { headers: { Authorization: 'Bearer ' + token } });
-    if (!res.ok) throw new Error(`Миниатюра: ${res.status}`);
-    return res.blob();
-  }
-
-  /** Свежая ссылка на миниатюру одного файла — когда список уже протух. */
-  async function thumbLink(fileId) {
-    const f = await call(`${API}/files/${fileId}?fields=thumbnailLink`);
-    return f.thumbnailLink || null;
-  }
-
   async function trash(fileId) {
     return call(`${API}/files/${fileId}`, {
       method: 'PATCH',
@@ -292,6 +276,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, download, downloadThumb, thumbLink, trash, folderLink,
+    listDayFiles, download, trash, folderLink, usage,
   };
 }

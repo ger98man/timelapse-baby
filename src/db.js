@@ -2,17 +2,21 @@
 // Всё остальное приложение работает через эти функции, поэтому подменить
 // хранилище (на сервер, на CloudKit) можно не трогая остальной код.
 //
-// Кэш разложен на два уровня, и это главное решение файла:
+// Фотографий на телефоне не остаётся ни одной — это осознанное решение:
 //
-//   entries — лёгкая карточка дня: чьи файлы в папке, разметка глаз,
-//             комментарий и квадратная миниатюра. Десятки килобайт.
-//   blobs   — тяжёлое тело дня: мастер-кадр и выровненный кадр. Сотни.
+//   entries — лёгкая опись дня: чьи файлы в папке, разметка глаз и
+//             комментарий. Байты, не мегабайты. Живёт в IndexedDB.
+//   blobs   — сами снимки. Живут в памяти вкладки и умирают вместе с ней:
+//             ни мастер-кадр, ни выровненный кадр, ни миниатюра на диск
+//             устройства не попадают.
 //
-// Календарю нужен только первый уровень, поэтому листать месяцы можно, не
-// разбудив ни одного мегабайта: показывать нечего дороже миниатюры.
+// Поэтому календарь показывает галочки, а не миниатюры, а любой показ снимка
+// начинается с загрузки из папки. Платой за это стал трафик, взамен — на
+// телефоне нет ни одной фотографии, которую можно было бы забыть стереть.
 
 export const DB_NAME = 'timelapse-baby';
-const DB_VERSION = 2;
+// 3 — версия, в которой хранилище снимков на диске удалено насовсем.
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -25,14 +29,19 @@ function open() {
       // Кэш выбрасываемый, поэтому при смене раскладки его проще стереть, чем
       // переносить: индекс вернётся из папки одним запросом. Настройки живут
       // отдельно и переживают любую такую чистку.
-      if (event.oldVersion < 2 && db.objectStoreNames.contains('entries')) {
+      // Опись выбрасываем при каждой смене раскладки: она возвращается из
+      // папки одним запросом. В версии 3 это ещё и способ стереть миниатюры,
+      // которые прошлые версии успели положить в карточки дней.
+      if (event.oldVersion < 3 && db.objectStoreNames.contains('entries')) {
         db.deleteObjectStore('entries');
       }
       if (!db.objectStoreNames.contains('entries')) {
         db.createObjectStore('entries', { keyPath: 'date' });
       }
-      if (!db.objectStoreNames.contains('blobs')) {
-        db.createObjectStore('blobs', { keyPath: 'date' });
+      // Снимки больше не хранятся на устройстве. Старое хранилище сносим —
+      // вместе со всем, что успело в него лечь на прошлых версиях.
+      if (db.objectStoreNames.contains('blobs')) {
+        db.deleteObjectStore('blobs');
       }
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
@@ -81,9 +90,6 @@ function run(storeName, mode, fn) {
  * @property {?string} noteId       id файла с комментарием, если он есть
  * @property {?string} noteModified время правки комментария
  * @property {boolean} noteStale    комментарий в папке новее нашей копии
- * @property {?string} thumbLink    короткоживущая ссылка на миниатюру Диска
- * @property {?Blob}  thumb         квадратная миниатюра для календаря (~15 КБ)
- * @property {?string} thumbFrom    'drive' — из миниатюры Диска, 'master' — своя
  * @property {number} w
  * @property {number} h
  * @property {string} comment
@@ -126,40 +132,46 @@ export const entries = {
 };
 
 /**
- * Тело дня — тяжёлый уровень кэша: мастер-кадр и выровненный кадр.
- * Нужно только тому, кто смотрит сам снимок или собирает видео, поэтому
- * качается по требованию и в любой момент может быть выброшено.
+ * Снимки — только в памяти. Ни IndexedDB, ни Cache Storage: закрыли вкладку
+ * (или позвали blobs.clear()) — и на телефоне не осталось ничего.
+ *
+ * Интерфейс намеренно асинхронный, как у остальных хранилищ: так вызывающий
+ * код не знает, где именно лежат данные, и переезд обратно ничего не сломает.
  *
  * @typedef {Object} Body
  * @property {string} date
  * @property {Blob} photo      мастер-кадр (jpeg)
  * @property {Blob} aligned    выровненный кадр для видео
  */
+const memory = new Map();
 
 export const blobs = {
   get(date) {
-    return run('blobs', 'readonly', s => s.get(date));
+    return Promise.resolve(memory.get(date));
   },
 
   put(body) {
-    return run('blobs', 'readwrite', s => s.put(body));
+    memory.set(body.date, body);
+    return Promise.resolve();
   },
 
   delete(date) {
-    return run('blobs', 'readwrite', s => s.delete(date));
+    memory.delete(date);
+    return Promise.resolve();
   },
 
   clear() {
-    return run('blobs', 'readwrite', s => s.clear());
+    memory.clear();
+    return Promise.resolve();
   },
 
-  /** Какие дни уже лежат тут целиком — по ключам, не поднимая сами блобы. */
+  /** Какие дни уже загружены в память. */
   allDates() {
-    return run('blobs', 'readonly', s => s.getAllKeys());
+    return Promise.resolve([...memory.keys()]);
   },
 
   count() {
-    return run('blobs', 'readonly', s => s.count());
+    return Promise.resolve(memory.size);
   },
 };
 

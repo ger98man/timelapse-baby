@@ -300,9 +300,19 @@
   <section id="screen-video" class="screen hidden">
     <header class="head"><h1>Таймлапс</h1></header>
     <div class="pad">
-      <div id="video-preview" class="video-slot">
+      <!-- Нажатие по кадру — плей и пауза: это самая большая мишень на экране
+           и первое, куда тянется палец. -->
+      <div id="video-preview" class="video-slot" role="button" tabindex="0"
+           aria-label="Пуск и пауза">
         <canvas id="video-canvas" width="540" height="540"></canvas>
         <video id="video-result" class="hidden" playsinline controls></video>
+        <div id="video-overlay" class="video-overlay hidden" aria-hidden="true"></div>
+      </div>
+
+      <div id="video-track" class="video-track hidden">
+        <input id="video-seek" type="range" min="0" max="0" step="1" value="0"
+               aria-label="Перемотка">
+        <span id="video-pos" class="video-pos"></span>
       </div>
 
       <!-- Посмотреть — самое частое, что здесь делают, поэтому плей стоит
