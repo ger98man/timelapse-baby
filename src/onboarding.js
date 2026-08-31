@@ -78,6 +78,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     const pane = name => document.querySelector(`.step[data-step="${name}"]`);
 
+    // Подсказку под папкой некоторые случаи переписывают под себя. Держим
+    // исходную, иначе разовое предупреждение остаётся висеть навсегда.
+    const folderHint = $('wiz-folder-hint').textContent;
+
     function renderChrome() {
       const dots = $('wiz-dots');
       dots.innerHTML = '';
@@ -142,6 +146,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       await settings.merge({ driveFolderId: root.id, driveFolderName: name });
 
       $('wiz-folder-choice').classList.add('hidden');
+      $('wiz-folder-hint').textContent = folderHint;
       $('wiz-folder-text').textContent =
         'Готово. Всё, что вы снимете, будет складываться сюда.';
       $('wiz-folder-name').textContent = name;
@@ -182,16 +187,33 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
             'Они появятся в приложении, вводить ничего не нужно.'
           : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
+        return;
+      }
+
+      // Настроек нет — а причин у этого две, и лечатся они по-разному: файла
+      // в папке правда нет, или Google выдал доступ к самой папке, но не к
+      // тому, что внутри. Отличить их можно только заглянув внутрь, поэтому
+      // заглядываем и говорим, что увидели. Иначе человек, у которого папка
+      // полна снимков, видит пустой вопрос про имя и считает это поломкой.
+      let seen = null;
+      try { seen = (await drive.listChildren(root.id)).length; } catch { /* не пустили */ }
+
+      if (!root.ownedByMe && !seen) {
+        $('wiz-folder-text').textContent =
+          'Папка подключена, но внутрь неё приложение не видит: Google выдал ' +
+          'доступ к самой папке, а не к её содержимому.';
+        $('wiz-folder-hint').textContent =
+          'Выберите её заново кнопкой ниже — в окне Google не заходите внутрь ' +
+          'папки, а нажмите на неё один раз и сразу «Select». И проверьте, что ' +
+          'первый родитель дал вам права редактора, а не просмотра.';
       } else if (state.remoteDays) {
-        // Дни есть, а настроек нет — так выглядит папка первого родителя,
-        // который снимал старой версией. Говорим прямо, почему сейчас всё
-        // равно спросим имя: молчаливый вопрос выглядит как поломка.
         $('wiz-folder-text').textContent =
           `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении. ` +
           'Настроек (config.json) в ней нет — спрошу имя и дату и положу их туда.';
       } else if (!root.ownedByMe) {
         $('wiz-folder-text').textContent =
-          'Готово. Настроек в этой папке пока нет — спрошу имя и дату и запишу их в неё.';
+          `Готово. Внутри папки приложение видит файлов: ${seen}, но настроек ` +
+          'среди них нет — спрошу имя и дату и запишу их в неё.';
       } else if (found && root.ownedByMe) {
         // Своя, пустая и найденная сама — чаще всего след прошлого захода. Если
         // человек пришёл вторым, «Готово» здесь означало бы, что он начнёт
@@ -244,6 +266,15 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         const token = await G.getAccessToken({ interactive: true });
         const folder = await pickFolder(token);
         if (!folder) return;
+        // В окне Google можно провалиться внутрь альбома и выбрать папку года —
+        // тогда «альбомом» стала бы она, а настройки и все прошлые годы
+        // остались бы снаружи. Имена там всегда числовые, это и ловим.
+        if (/^\d{1,4}$/.test(folder.name.trim())) {
+          err.textContent =
+            'Это папка года внутри альбома, а нужна папка альбома целиком — ' +
+            'та, что подписана почтой. В окне выбора вернитесь на шаг назад.';
+          return;
+        }
         // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
         // на ней уже стоит, от владельца.
         await drive.adoptRoot(folder.id);

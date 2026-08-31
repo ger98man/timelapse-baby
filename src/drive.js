@@ -277,20 +277,22 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   }
 
   /**
-   * Ищет файл прямо в папке — по родителю, а не по метке приложения.
+   * Всё, что лежит прямо в папке, — по родителю, а не по метке приложения.
    *
    * Метку ставит только наш код, а config.json в общей папке мог появиться
-   * иначе: его правили руками или клали туда другой копией. Для второго
-   * родителя это разница между «всё уже настроено» и «введите имя заново».
+   * иначе: его правили руками или писал другой аккаунт. Для второго родителя
+   * это разница между «всё уже настроено» и «введите имя заново».
+   *
+   * Заодно это единственный честный ответ на вопрос «а видит ли приложение
+   * вообще, что внутри»: пустой список у непустой папки означает, что доступ
+   * выдан на саму папку, но не на её содержимое.
    */
-  async function findInRoot(rootId, name) {
-    if (!rootId) return null;
-    const found = await list(q([
+  async function listChildren(rootId) {
+    if (!rootId) return [];
+    return list(q([
       `'${rootId}' in parents`,
-      `name='${name}'`,
       'trashed=false',
-    ]), 'files(id,name,appProperties),nextPageToken');
-    return found[0] || null;
+    ]), 'files(id,name,mimeType,appProperties),nextPageToken');
   }
 
   /** Помечает выбранную через окно Google папку как корневую для приложения. */
@@ -305,6 +307,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, findInRoot, download, trash, untrash, folderLink, usage,
+    listDayFiles, listChildren, download, trash, untrash, folderLink, usage,
   };
 }

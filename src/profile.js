@@ -51,9 +51,10 @@ function findConfig(files) {
 async function locateConfig(drive, files) {
   const tagged = findConfig(files);
   if (tagged) return tagged;
-  if (typeof drive.findInRoot !== 'function') return null;
+  if (typeof drive.listChildren !== 'function') return null;
   try {
-    return await drive.findInRoot(await settings.get('driveFolderId'), CONFIG_NAME);
+    const rootId = await settings.get('driveFolderId');
+    return findConfig(await drive.listChildren(rootId)) || null;
   } catch {
     return null;                      // нет доступа или сети — не беда
   }
