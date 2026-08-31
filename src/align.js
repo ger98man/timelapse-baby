@@ -92,11 +92,9 @@ export function drawCover(ctx, img, iw, ih, size) {
 }
 
 // --- Производные кадры ------------------------------------------------------
-// Выровненный кадр и миниатюра — всегда пересоздаваемые артефакты поверх
-// оригинала. Хранятся ради скорости (видео и календарь не декодируют
-// мегапиксельные снимки), и любой из них можно выбросить в любой момент.
-
-export const THUMB_SIZE = 320;
+// Выровненный кадр — всегда пересоздаваемый артефакт поверх оригинала.
+// Хранится ради скорости (видео не декодирует мегапиксельные снимки) и может
+// быть выброшен в любой момент.
 
 /**
  * Квадратный кадр из чего угодно: из мастер-кадра, из миниатюры Диска.
@@ -117,22 +115,3 @@ export async function renderSquareBlob(source, { size = 1080, eyes = null,
   }
 }
 
-/**
- * Всё, что выводится из мастер-кадра.
- *
- * Миниатюра берётся из выровненного кадра, если глаза отмечены. Иначе в
- * календаре и на «Сегодня» человек видел бы центральный кроп, а в таймлапс
- * уезжало бы совсем другое — и разметка выглядела бы бесполезной, пока не
- * соберёшь видео.
- */
-export async function deriveFrom(photo, eyes, { size = 1080, target = DEFAULT_TARGET } = {}) {
-  const aligned = await renderSquareBlob(photo, { size, eyes, target, quality: 0.88 });
-  const thumb = await renderSquareBlob(eyes ? aligned : photo,
-    { size: THUMB_SIZE, target, quality: 0.8 });
-  return { aligned, thumb };
-}
-
-/** Миниатюра из дешёвого источника — когда мастер-кадра на телефоне ещё нет. */
-export function thumbFrom(source, eyes, target = DEFAULT_TARGET) {
-  return renderSquareBlob(source, { size: THUMB_SIZE, eyes, target, quality: 0.8 });
-}

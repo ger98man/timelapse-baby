@@ -1,7 +1,7 @@
 import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { formatBytes } from './img.js';
-import { deriveFrom, drawAligned } from './align.js';
+import { drawAligned } from './align.js';
 import { buildVideo, videoSupported, pickMime } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
 import { pushProfile } from './profile.js';
@@ -24,7 +24,6 @@ const state = {
   calMonth: 0,
   urls: [],          // объектные URL текущего экрана, чтобы не течь памятью
   align: null,       // контекст оверлея разметки глаз
-  video: null,       // последнее собранное видео
   conn: { status: 'unknown', email: '', note: '' },   // связь с Google
   connAt: 0,         // когда её проверяли в последний раз
   screen: null,      // какой экран открыт — чтобы знать, с какого уходим
@@ -1278,11 +1277,15 @@ async function framesToZip(days) {
     name: `frames/${String(i + 1).padStart(4, '0')}_${f.date}.jpg`,
     data: f.blob,
   }));
+  // Скорость в команде — та, что выставлена ползунком: иначе собранное по
+  // подсказке видео шло бы не в том темпе, который человек только что выбрал.
+  const fps = Number($('video-fps').value);
   files.push({
     name: 'frames/КАК-СОБРАТЬ.txt',
     data: 'Кадры уже выровнены по глазам и пронумерованы по порядку.\n\n' +
           'Собрать видео из них можно одной командой:\n\n' +
-          '  ffmpeg -framerate 8 -pattern_type glob -i "*.jpg" -c:v libx264 -pix_fmt yuv420p timelapse.mp4\n',
+          `  ffmpeg -framerate ${fps} -pattern_type glob -i "*.jpg" ` +
+          '-c:v libx264 -pix_fmt yuv420p timelapse.mp4\n',
   });
   const zip = await createZip(files, (d, t) => progressSet(d, t));
   progressClose();

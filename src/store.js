@@ -17,7 +17,7 @@
 
 import { entries, blobs, bench, settings } from './db.js';
 import { toMaster } from './img.js';
-import { deriveFrom, renderSquareBlob } from './align.js';
+import { renderSquareBlob } from './align.js';
 import { TAG } from './drive.js';
 import { pullProfile } from './profile.js';
 
@@ -112,10 +112,19 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
   // Чего в папке нет — того нет и у нас. Кэш не хранит ничего своего.
   let dropped = 0;
   for (const day of await entries.allDates()) {
-    if (!remote.has(day)) { await entries.delete(day); await blobs.delete(day); dropped++; }
+    if (!remote.has(day)) {
+      await entries.delete(day);
+      await blobs.delete(day);
+      await bench.delete(day);
+      previewCache.delete(day);
+      dropped++;
+    }
   }
   for (const day of await blobs.allDates()) {
     if (!remote.has(day)) await blobs.delete(day);   // тело без карточки — мусор
+  }
+  for (const day of await bench.allDates()) {
+    if (!remote.has(day)) await bench.delete(day);
   }
 
   const days = [...remote.keys()].sort();
@@ -179,9 +188,9 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
       // следующем показе, когда снимок и так будет загружен.
       const body = await blobs.get(day);
       if (body && body.photo) {
-        const d = await deriveFrom(body.photo, eyes,
-          { size: cfg.videoSize, target: cfg.eyeTarget });
-        await blobs.put({ date: day, photo: body.photo, aligned: d.aligned });
+        const aligned = await renderSquareBlob(body.photo,
+          { size: cfg.videoSize, eyes, target: cfg.eyeTarget });
+        await blobs.put({ date: day, photo: body.photo, aligned });
       }
       changed++;
     } else {
@@ -308,9 +317,8 @@ export async function ensureBody(drive, date, { cfg = null } = {}) {
   }
 
   if (!body.aligned) {
-    const d = await deriveFrom(body.photo, entry.eyes,
-      { size: conf.videoSize, target: conf.eyeTarget });
-    body.aligned = d.aligned;
+    body.aligned = await renderSquareBlob(body.photo,
+      { size: conf.videoSize, eyes: entry.eyes, target: conf.eyeTarget });
     dirty = true;
   }
 
@@ -439,7 +447,8 @@ export async function putPhoto(drive, date, file) {
     props: { eyes: '' },        // снимок другой — старая разметка к нему не относится
   });
 
-  const derived = await deriveFrom(blob, null, { size: cfg.videoSize, target: cfg.eyeTarget });
+  const aligned = await renderSquareBlob(blob,
+    { size: cfg.videoSize, eyes: null, target: cfg.eyeTarget });
   const entry = {
     date,
     fileId: res.id,
@@ -454,7 +463,7 @@ export async function putPhoto(drive, date, file) {
   };
   await bench.delete(date);
   previewCache.delete(date);         // ссылка вела на прежний снимок
-  await blobs.put({ date, photo: blob, aligned: derived.aligned });
+  await blobs.put({ date, photo: blob, aligned });
   await entries.put(entry);
   return entry;
 }
@@ -466,20 +475,24 @@ export async function putEyes(drive, date, eyes) {
   if (!entry || !entry.fileId) throw new Error('Сначала нужен снимок за этот день');
 
   // Размечают всегда по мастер-кадру, так что он уже здесь; но если день
-  // размечают сразу после чужой съёмки — доберём.
+  // размечают сразу после чужой съёмки — доберём. Без снимка размечать нечего:
+  // раньше здесь стояла проверка, которая всё равно тут же читала loaded.body.
   const loaded = await ensureBody(drive, date, { cfg });
+  if (!loaded || !loaded.body.photo) {
+    throw new Error('Снимок не загрузился — разметка не сохранена');
+  }
 
   const res = await drive.updateProps(entry.fileId, {
     [TAG]: '1', kind: 'photo', day: date, eyes: eyesToProp(eyes),
   });
 
-  const fresh = loaded ? loaded.entry : entry;
+  const fresh = loaded.entry;
   fresh.eyes = eyes;
   fresh.modifiedTime = res.modifiedTime;
-  const derived = await deriveFrom(loaded.body.photo, eyes,
-    { size: cfg.videoSize, target: cfg.eyeTarget });
+  const aligned = await renderSquareBlob(loaded.body.photo,
+    { size: cfg.videoSize, eyes, target: cfg.eyeTarget });
   await bench.delete(date);          // на верстаке кадр по старым глазам
-  await blobs.put({ date, photo: loaded.body.photo, aligned: derived.aligned });
+  await blobs.put({ date, photo: loaded.body.photo, aligned });
   await entries.put(fresh);
   return fresh;
 }
@@ -515,7 +528,10 @@ export async function putComment(drive, date, text) {
 export async function removeDay(drive, date) {
   const entry = await entries.get(date);
   if (entry) {
-    for (const id of [entry.fileId, entry.noteId].filter(Boolean)) {
+    // Комментарий первым, снимок вторым. Приложение видит день по снимку,
+    // поэтому обратный порядок при отказе на середине оставлял бы в папке
+    // осиротевший .txt, до которого больше никак не добраться.
+    for (const id of [entry.noteId, entry.fileId].filter(Boolean)) {
       await drive.trash(id);      // если Диск откажет, бросим до правки кэша
     }
   }
