@@ -2,46 +2,80 @@
 """Иконки приложения. Без зависимостей: PNG пишется руками.
 
    python3 tools/make-icons.py
-"""
-import struct, zlib, os
 
-BG = (0x1C, 0x19, 0x17)
-CIRCLES = [  # (cx, cy, r, color) в долях от стороны
-    (0.215, 0.5, 0.059, (0x7A, 0x46, 0x32)),
-    (0.445, 0.5, 0.113, (0xC4, 0x66, 0x3F)),
-    (0.762, 0.5, 0.195, (0xE8, 0x84, 0x5C)),
+Рисунок: три детские головки в ряд, растущие слева направо, — тот самый
+таймлапс, ради которого всё и затевалось. Мелкой иконку видят чаще, чем
+крупной, поэтому в ней одна мысль и ни одной тонкой линии: на сорока
+пикселях выживают только крупные пятна.
+"""
+import struct, zlib, os, math
+
+# Фон — вертикальная растяжка розового: цвета те же, что у темы «для девочки».
+BG_TOP = (0xF2, 0x7F, 0xAB)
+BG_BOTTOM = (0xC9, 0x31, 0x6F)
+INK = (0xFF, 0xFF, 0xFF)
+
+# Три головки в ряд, растущие слева направо: снимок за снимком ребёнок
+# становится больше. Мелкие головы оставлены без завитка — на сорока
+# пикселях он превращается в шум.
+BASE = 0.78                 # общая «земля», по которой выровнены головы
+HEADS = [                   # cx, r, непрозрачность, рисовать ли завиток
+    (0.205, 0.085, 0.62, False),
+    (0.490, 0.125, 0.82, True),
+    (0.800, 0.170, 1.00, True),
 ]
-SS = 3  # подпиксельная сетка для сглаживания
+SS = 3   # подпиксельная сетка для сглаживания
+
+
+def blend(px, size, x, y, color, a):
+    i = (y * size + x) * 3
+    for c in range(3):
+        px[i + c] = round(px[i + c] * (1 - a) + color[c] * a)
+
+
+def disc(px, size, cx, cy, r, color, alpha=1.0):
+    """Круг со сглаженным краем."""
+    x0, x1 = max(0, int(cx - r - 2)), min(size, int(cx + r + 2))
+    y0, y1 = max(0, int(cy - r - 2)), min(size, int(cy + r + 2))
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            hits = 0
+            for sy in range(SS):
+                for sx in range(SS):
+                    dx = x + (sx + 0.5) / SS - cx
+                    dy = y + (sy + 0.5) / SS - cy
+                    if dx * dx + dy * dy <= r * r:
+                        hits += 1
+            if hits:
+                blend(px, size, x, y, color, alpha * hits / (SS * SS))
+
+
+def stroke_arc(px, size, cx, cy, r, width, a0, a1, color):
+    """Дуга с круглыми концами — штампуем кружки вдоль неё."""
+    steps = max(24, int(r * 2))
+    for i in range(steps + 1):
+        t = math.radians(a0 + (a1 - a0) * i / steps)
+        disc(px, size, cx + math.cos(t) * r, cy + math.sin(t) * r, width / 2, color)
 
 
 def render(size, inset=1.0):
     px = bytearray(size * size * 3)
     for y in range(size):
-        row = y * size * 3
-        for x in range(size):
-            px[row + x * 3:row + x * 3 + 3] = bytes(BG)
+        t = y / max(1, size - 1)
+        row = bytes(round(BG_TOP[c] * (1 - t) + BG_BOTTOM[c] * t) for c in range(3))
+        px[y * size * 3:(y + 1) * size * 3] = row * size
 
-    for cxf, cyf, rf, color in CIRCLES:
-        cx = (cxf - 0.5) * inset * size + size / 2
-        cy = (cyf - 0.5) * inset * size + size / 2
-        r = rf * inset * size
-        x0, x1 = max(0, int(cx - r - 2)), min(size, int(cx + r + 2))
-        y0, y1 = max(0, int(cy - r - 2)), min(size, int(cy + r + 2))
-        for y in range(y0, y1):
-            for x in range(x0, x1):
-                hits = 0
-                for sy in range(SS):
-                    for sx in range(SS):
-                        dx = x + (sx + 0.5) / SS - cx
-                        dy = y + (sy + 0.5) / SS - cy
-                        if dx * dx + dy * dy <= r * r:
-                            hits += 1
-                if not hits:
-                    continue
-                a = hits / (SS * SS)
-                i = (y * size + x) * 3
-                for c in range(3):
-                    px[i + c] = round(px[i + c] * (1 - a) + color[c] * a)
+    # inset уводит рисунок внутрь: у маскируемой иконки края съедает система
+    def s(v):
+        return (v - 0.5) * inset * size + size / 2
+
+    for cx, r, alpha, curl in HEADS:
+        cy = BASE - r
+        disc(px, size, s(cx), s(cy), r * inset * size, INK, alpha)
+        if curl:
+            stroke_arc(px, size, s(cx + r * 0.30), s(cy - r * 1.16),
+                       r * 0.40 * inset * size, r * 0.30 * inset * size,
+                       150, 368, INK)
     return px
 
 
@@ -68,7 +102,8 @@ os.makedirs('icons', exist_ok=True)
 for size, name, inset in [
     (192, 'icons/icon-192.png', 1.0),
     (512, 'icons/icon-512.png', 1.0),
-    (512, 'icons/icon-maskable-512.png', 0.66),
+    # Маскируемую иконку системы обрезают по кругу — мотив уводим внутрь.
+    (512, 'icons/icon-maskable-512.png', 0.72),
     (180, 'icons/apple-touch-icon.png', 1.0),
 ]:
     write_png(name, size, render(size, inset))
