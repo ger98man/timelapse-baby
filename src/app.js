@@ -123,17 +123,14 @@ async function saveBlob(blob, filename) {
   return 'downloaded';
 }
 
-function targetFromCfg(cfg) { return cfg.eyeTarget; }
-
 /**
  * Что показывать человеку. С отмеченными глазами — выровненный кадр: на экране
- * должно быть ровно то, что попадёт в таймлапс. Тела на телефоне может не быть
- * вовсе — тогда остаётся миниатюра, которой хватает, чтобы день не выглядел
- * пустым, пока снимок едет.
+ * должно быть ровно то, что попадёт в таймлапс. Снимков на телефоне не
+ * хранится, поэтому показывать нечего, пока день не загружен из папки.
  */
 function faceOf(entry, body) {
   if (body && body.photo) return entry.eyes && body.aligned ? body.aligned : body.photo;
-  return entry.thumb || null;
+  return null;
 }
 
 /** Рисует снимок дня в слоте: сам кадр и подпись под ним. */
@@ -1183,11 +1180,6 @@ function applyTheme(name) {
   try { localStorage.setItem('theme', theme); } catch { /* приватный режим */ }
 }
 
-function eyeTargetFrom(yPct, dPct) {
-  const y = yPct / 100, d = dPct / 100;
-  return { lx: 0.5 - d / 2, ly: y, rx: 0.5 + d / 2, ry: y };
-}
-
 function renderThemeCard() {
   const active = THEMES.includes(state.cfg.theme) ? state.cfg.theme : 'default';
   for (const btn of $('set-theme').querySelectorAll('.theme-opt')) {
@@ -1200,16 +1192,7 @@ async function renderMore() {
   await renderGoogleCard();
   $('set-name').value = cfg.babyName || '';
   $('set-birth').value = cfg.birthDate || '';
-  $('set-due').value = cfg.dueDate || '';
   renderThemeCard();
-  $('set-size').value = cfg.videoSize;
-  $('size-label').textContent = cfg.videoSize;
-
-  const yPct = Math.round(cfg.eyeTarget.ly * 100);
-  const dPct = Math.round((cfg.eyeTarget.rx - cfg.eyeTarget.lx) * 100);
-  $('set-eyey').value = yPct; $('eyey-label').textContent = yPct;
-  $('set-eyed').value = dPct; $('eyed-label').textContent = dPct;
-
   const last = cfg.lastExportAt;
   const total = await entries.count();
   if (!last) {
@@ -1223,52 +1206,38 @@ async function renderMore() {
       : `Последняя выгрузка ${days} ${D.plural(days, 'день', 'дня', 'дней')} назад.`;
   }
 
-  const est = await storageEstimate();
-  const persisted = navigator.storage && navigator.storage.persisted
-    ? await navigator.storage.persisted() : false;
-  // Снимков на телефоне обычно меньше, чем дней: они качаются по требованию.
-  const cached = await blobs.count();
-  const bodies = total
-    ? ` Снимков на телефоне ${cached} из ${total} — остальные лежат в папке ` +
-      'и подтянутся, когда понадобятся.'
-    : '';
-  $('storage-status').textContent = (est
-    ? `Занято ${formatBytes(est.usage)} из ${formatBytes(est.quota)}. ` +
-      (persisted ? 'Данные защищены от автоочистки.' : 'Защита от автоочистки не включена.')
-    : 'Браузер не сообщает объём хранилища.') + bodies;
-  $('btn-persist').disabled = persisted;
+  await renderStorageCard(total);
 }
 
 /**
- * Пересобирает всё производное после смены композиции кадра.
- *
- * Дни, снимков которых на телефоне нет, пересобирать не из чего — у них просто
- * выбрасывается миниатюра, и она приедет из Диска уже по новым правилам.
+ * Место меряем там, где фотографии и лежат по-настоящему, — в Google Диске.
+ * Запрос сетевой, поэтому карточка сначала честно говорит, что считает, а
+ * при отключённом Google не спрашивает ничего.
+ * @param {number} total сколько всего дней снято
  */
-async function rebuildAll() {
-  const dates = await entries.allDates();
-  const opts = { size: state.cfg.videoSize, target: targetFromCfg(state.cfg) };
-  progressOpen('Пересобираю кадры');
-  for (let i = 0; i < dates.length; i++) {
-    const date = dates[i];
-    const entry = await entries.get(date);
-    const body = await blobs.get(date);
-    if (entry && body && body.photo) {
-      const d = await deriveFrom(body.photo, entry.eyes, opts);
-      await blobs.put({ date, photo: body.photo, aligned: d.aligned });
-      entry.thumb = d.thumb;
-      entry.thumbFrom = 'master';
-      await entries.put(entry);
-    } else if (entry && entry.thumb) {
-      entry.thumb = null;
-      entry.thumbFrom = null;
-      await entries.put(entry);
-    }
-    progressSet(i + 1, dates.length);
+async function renderStorageCard(total) {
+  const el = $('storage-status');
+  if (!configured() || !state.cfg.driveEmail) {
+    el.textContent = 'Google не подключён — считать нечего.';
+    return;
   }
-  progressClose();
-  freeUrls();
-  toast('Кадры пересобраны');
+  if (!navigator.onLine) {
+    el.textContent = 'Нет сети — спрошу у Диска, когда связь появится.';
+    return;
+  }
+  el.textContent = 'Считаю…';
+  try {
+    const u = await drive().usage();
+    const days = total
+      ? ` за ${total} ${D.plural(total, 'день', 'дня', 'дней')}`
+      : '';
+    const free = u.limit
+      ? ` Свободно ${formatBytes(Math.max(0, u.limit - u.used))} из ${formatBytes(u.limit)}.`
+      : ' Google не сообщает объём хранилища для этого аккаунта.';
+    el.textContent = `Альбом занимает ${formatBytes(u.albumBytes)}${days}.` + free;
+  } catch (e) {
+    el.textContent = e.message || 'Диск не ответил — не получилось посчитать.';
+  }
 }
 
 // --- навигация --------------------------------------------------------------
@@ -1430,7 +1399,6 @@ function bind() {
     };
   saveField('set-name', 'babyName', v => v.trim());
   saveField('set-birth', 'birthDate');
-  saveField('set-due', 'dueDate');
 
   $('set-theme').onclick = async e => {
     const btn = e.target.closest('.theme-opt');
@@ -1441,25 +1409,6 @@ function bind() {
     renderThemeCard();
     toast('Сохранено');
   };
-
-  $('set-size').oninput = e => { $('size-label').textContent = e.target.value; };
-  $('set-size').onchange = async e => {
-    await settings.set('videoSize', Number(e.target.value));
-    await saveShared();
-    $('video-canvas').width = $('video-canvas').height = 540;
-  };
-  const onEye = async () => {
-    $('eyey-label').textContent = $('set-eyey').value;
-    $('eyed-label').textContent = $('set-eyed').value;
-    await settings.set('eyeTarget',
-      eyeTargetFrom(Number($('set-eyey').value), Number($('set-eyed').value)));
-    await saveShared();
-  };
-  $('set-eyey').oninput = () => { $('eyey-label').textContent = $('set-eyey').value; };
-  $('set-eyed').oninput = () => { $('eyed-label').textContent = $('set-eyed').value; };
-  $('set-eyey').onchange = onEye;
-  $('set-eyed').onchange = onEye;
-  $('btn-rebuild').onclick = rebuildAll;
 
   // Google
   $('conn-fix').onclick = async () => {
@@ -1506,10 +1455,11 @@ function bind() {
 
   $('btn-google-off').onclick = async () => {
     const ok = await ask({
-      title: 'Отключить Google?',
-      text: 'Фотографии и комментарии останутся и на телефоне, и в папке Диска. ' +
-            'Синхронизация просто остановится.',
-      yes: 'Отключить',
+      title: 'Выйти из учётной записи Google?',
+      text: 'Телефон забудет аккаунт, синхронизация остановится. Фотографии и ' +
+            'комментарии останутся и здесь, и в папке Диска — чтобы снимать ' +
+            'в неё дальше, нужно будет войти снова, можно другим аккаунтом.',
+      yes: 'Выйти',
     });
     if (!ok) return;
     await G.revoke();
@@ -1517,13 +1467,7 @@ function bind() {
     state.cfg = await settings.all();
     setConn('off', '', 'Google не подключён');
     await renderGoogleCard();
-    toast('Google отключён');
-  };
-
-  $('btn-persist').onclick = async () => {
-    const ok = await requestPersistence();
-    toast(ok ? 'Данные защищены' : 'Браузер отказал — выгружайте архив почаще');
-    await renderMore();
+    toast('Вы вышли из учётной записи Google');
   };
 
   $('btn-export').onclick = async () => {
@@ -1648,13 +1592,19 @@ async function boot() {
   $('app').classList.remove('hidden');
   await showScreen('today');
 
-  requestPersistence().catch(() => {});
-
   // Сразу после настройки опись тянется на виду, с прогрессом: человек должен
   // попасть в заполненный календарь, а не в пустой, который молча догружается.
   // Стоит это одного запроса — снимки приедут потом и поодиночке.
   if (justSetUp && configured() && state.cfg.driveEmail) await runSync();
   else syncQuietly();
+
+  // Снимки живут в памяти вкладки. Уходя — стираем и их, и предпросмотр:
+  // после закрытия приложения на телефоне не должно остаться ни кадра.
+  window.addEventListener('pagehide', () => {
+    freeUrls();
+    store.clearPreview();
+    blobs.clear();
+  });
 
   window.addEventListener('online', () => {
     applyOnlineState();

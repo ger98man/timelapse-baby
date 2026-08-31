@@ -50,8 +50,8 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
       // ничего, а починка ровно одна — выбрать папку заново.
       if (res.status === 403 && /has not granted the app/.test(detail)) {
         throw new Error(
-          'Приложению не выдан доступ к этой папке. Нажмите «Подключиться ' +
-          'к общей папке» и выберите её на вкладке «Доступные мне». ' +
+          'Приложению не выдан доступ к этой папке. Нажмите «Выбрать папку ' +
+          'в Google Диск» и выберите её на вкладке «Доступные мне». ' +
           'Если папку так и не пускает — попросите первого родителя дать ' +
           'вам права редактора.');
       }
@@ -191,6 +191,32 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   }
 
   /** Все файлы приложения одним запросом — папки обходить не нужно. */
+  /**
+   * Сколько места занимает альбом и сколько осталось в самом Диске.
+   *
+   * Размер считаем по своим же файлам: скоуп drive.file чужого не показывает,
+   * да и мерить надо именно альбом, а не весь Диск. Файлы в общей папке
+   * лежат на квоте того, кто их залил, — поэтому «свободно» тут про аккаунт,
+   * которым вошли, а не про папку.
+   * @returns {Promise<{albumBytes:number, files:number, used:number, limit:number}>}
+   */
+  async function usage() {
+    const files = await list(q([
+      `appProperties has { key='${TAG}' and value='1' }`,
+      'trashed=false',
+    ]), 'files(id,size),nextPageToken');
+    const albumBytes = files.reduce((n, f) => n + Number(f.size || 0), 0);
+    const about = await call(`${API}/about?fields=storageQuota`);
+    const quota = about.storageQuota || {};
+    return {
+      albumBytes,
+      files: files.length,
+      used: Number(quota.usage || 0),
+      // Безлимитные аккаунты limit не присылают — там и показывать нечего.
+      limit: quota.limit ? Number(quota.limit) : 0,
+    };
+  }
+
   async function listDayFiles() {
     return list(q([
       `appProperties has { key='${TAG}' and value='1' }`,

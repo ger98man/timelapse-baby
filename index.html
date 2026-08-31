@@ -347,39 +347,40 @@
     <header class="head"><h1>Настройки</h1></header>
     <div class="pad">
 
+      <!-- Про кого снимаем — первым: это единственная карточка, куда
+           заглядывают не по делу, а чтобы поправить имя или дату. -->
+      <div class="card">
+        <h2>Ребёнок</h2>
+        <label class="field"><span>Имя</span><input id="set-name" type="text"></label>
+        <label class="field"><span>Дата рождения</span><input id="set-birth" type="date"></label>
+      </div>
+
       <div class="card" id="google-card">
         <h2>Google Диск</h2>
         <p id="google-status" class="hint"></p>
-        <button id="btn-wizard" class="btn btn-primary full hidden">Подключить Google Диск</button>
-        <button id="btn-google-connect" class="btn btn-primary full hidden">Подключить Google</button>
-        <button id="btn-sync" class="btn btn-primary full hidden">Синхронизировать</button>
-        <a id="drive-link" class="btn full hidden" target="_blank" rel="noopener">Открыть папку в Диске</a>
-        <button id="btn-pick-folder" class="btn full hidden">Подключиться к общей папке</button>
-        <button id="btn-google-off" class="btn btn-quiet full hidden">Отключить Google</button>
-        <p class="hint" id="google-hint">Второму родителю: пусть первый откроет папку в Диске и
-          даст доступ на редактирование. Потом нажмите «Подключиться к общей
-          папке» и выберите её — дальше оба снимаете в один альбом.</p>
+        <button id="btn-google-connect" class="btn full hidden">Подключить Google</button>
+        <button id="btn-sync" class="btn full hidden">Синхронизировать</button>
+        <a id="drive-link" class="btn full hidden" target="_blank" rel="noopener">Открыть Google Диск</a>
+        <button id="btn-pick-folder" class="btn full hidden">Выбрать папку в Google Диск</button>
+        <button id="btn-google-off" class="btn full hidden">Выйти из учётной записи Google</button>
+        <p class="hint" id="google-hint">Второму родителю: пусть первый откроет папку в Диске
+          и даст доступ на редактирование. Дальше приложение само спросит при
+          входе, первый вы или второй, — выберите общую папку, и оба будете
+          снимать в один альбом. Сменить её потом можно здесь же.</p>
       </div>
 
       <div class="card" id="export-card">
         <h2>Архив</h2>
         <p id="export-status" class="hint"></p>
-        <button id="btn-export" class="btn btn-primary full">Выгрузить архив (ZIP)</button>
-        <button id="btn-import" class="btn full">Загрузить архив</button>
-        <button id="btn-frames-zip" class="btn btn-quiet full">Выгрузить все кадры (ZIP)</button>
+        <button id="btn-export" class="btn full">Выгрузить архив (ZIP)</button>
+        <button id="btn-import" class="btn full">Загрузить архив (ZIP)</button>
+        <button id="btn-frames-zip" class="btn full">Выгрузить все кадры (ZIP)</button>
         <p class="hint">В архиве обычные JPEG и текстовые файлы, разложенные по
           годам и месяцам. Положите его в iCloud Drive или на Google Диск — это и
           есть настоящая копия. Приложение здесь только оболочка.</p>
         <p class="hint">Кадры — это отдельная выгрузка: все дни, выровненные по
           глазам и пронумерованные по порядку. Из них таймлапс собирается на
           компьютере одной командой — она лежит внутри архива.</p>
-      </div>
-
-      <div class="card">
-        <h2>Ребёнок</h2>
-        <label class="field"><span>Имя</span><input id="set-name" type="text"></label>
-        <label class="field"><span>Дата рождения</span><input id="set-birth" type="date"></label>
-        <label class="field"><span>ПДР (для недель беременности)</span><input id="set-due" type="date"></label>
       </div>
 
       <div class="card">
@@ -401,23 +402,6 @@
       </div>
 
       <div class="card">
-        <h2>Кадр</h2>
-        <label class="field">
-          <span>Размер кадра: <b id="size-label">1080</b> px</span>
-          <input id="set-size" type="range" min="540" max="1440" step="180" value="1080">
-        </label>
-        <label class="field">
-          <span>Глаза на высоте: <b id="eyey-label">42</b>% кадра</span>
-          <input id="set-eyey" type="range" min="25" max="60" step="1" value="42">
-        </label>
-        <label class="field">
-          <span>Расстояние между глазами: <b id="eyed-label">25</b>% ширины</span>
-          <input id="set-eyed" type="range" min="12" max="45" step="1" value="25">
-        </label>
-        <button id="btn-rebuild" class="btn full">Пересобрать все кадры</button>
-      </div>
-
-      <div class="card">
         <h2>Приватность</h2>
         <p class="hint">Своего сервера у приложения нет: ни аналитики, ни
           облачного распознавания лиц. Фотографии лежат в вашем Google Диске,
@@ -429,9 +413,8 @@
       </div>
 
       <div class="card">
-        <h2>Место на телефоне</h2>
+        <h2>Место в Google Диске</h2>
         <p id="storage-status" class="hint"></p>
-        <button id="btn-persist" class="btn full">Защитить данные от очистки</button>
       </div>
 
       <p class="footer-note">Сделано вручную, специально для вас.</p>

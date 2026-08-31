@@ -256,6 +256,8 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: var(--surface-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 12px; padding: 13px 16px; font: inherit; font-weight: 550;
   font-size: 15px; cursor: pointer;
+  /* Ссылка, выглядящая кнопкой, не должна выдавать себя подчёркиванием. */
+  text-decoration: none;
 }
 .btn:active { transform: scale(.985); background: var(--line); }
 .btn:disabled { opacity: .45; }
