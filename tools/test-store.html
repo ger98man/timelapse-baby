@@ -26,13 +26,14 @@
 свойства модели. Первое: правда живёт в папке, а локальная база —
 выбрасываемая копия, поэтому любая правка обязана доходить до папки, а всё,
 чего в папке нет, обязано исчезать с телефона. Второе: копия наполняется по
-мере надобности — обновление читает опись, а снимки качаются, только когда их
-собрались показать или собрать в видео.</p>
+мере надобности — обновление читает опись, снимки качаются, только когда их
+собрались показать, а собранное ради видео живёт на верстаке и стирается
+целиком.</p>
 <div id="out"></div>
 <div id="summary"></div>
 
 <script type="module">
-import { entries, blobs, settings, clearCache } from '../src/db.js';
+import { entries, blobs, bench, settings, clearCache } from '../src/db.js';
 import * as store from '../src/store.js';
 import { pushProfile } from '../src/profile.js';
 
@@ -140,7 +141,7 @@ async function jpeg(tint) {
   check('в кэше два дня', (await entries.allDates()).length === 2);
   const cached = await entries.get('2026-09-10');
   check('кэш помнит файл папки', Boolean(cached.fileId && cached.modifiedTime));
-  check('миниатюра построена по оригиналу', cached.thumbFrom === 'master' && Boolean(cached.thumb));
+  check('в карточку дня снимок не лёг', !('thumb' in cached));
   check('выровненный кадр построен', Boolean((await blobs.get('2026-09-10')).aligned));
   check('имя файла по дате', drive.dayFile('2026-09-10').name === '2026-09-10.jpg');
 
@@ -173,32 +174,49 @@ async function jpeg(tint) {
   const back = await entries.get('2026-09-11');
   check('разметка вернулась описью', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
 
-  caseOf('Календарю хватает миниатюры Диска');
+  caseOf('Предпросмотр идёт по миниатюрам Диска');
   drive.downloads.length = 0;
-  const withThumb = await store.ensureThumb(drive, '2026-09-11');
-  check('миниатюра появилась', Boolean(withThumb.thumb));
-  check('взята готовая, из Диска', withThumb.thumbFrom === 'drive');
-  check('оригинал так и не скачан', drive.pulled('photo') === 0);
-  check('второй раз ничего не качает',
-    (drive.downloads.length = 0, await store.ensureThumb(drive, '2026-09-11'),
-     drive.downloads.length === 0));
+  store.clearPreview();
+  const preview = await store.previewFrames(drive, ['2026-09-10', '2026-09-11']);
+  check('кадры предпросмотра есть', preview.length === 2, `кадров=${preview.length}`);
+  check('это ссылки, а не файлы', preview.every(p => typeof p.url === 'string'));
+  check('разметка едет вместе с кадром',
+    preview.some(p => p.date === '2026-09-11' && p.eyes));
+  check('оригиналы ради предпросмотра не качались', drive.pulled('photo') === 0);
+
+  caseOf('Сборка идёт через верстак и в памяти не копится');
+  drive.downloads.length = 0;
+  const both = ['2026-09-10', '2026-09-11'];
+  check('до сборки качать нужно всё', (await store.pendingFrames(both)) === 2);
+  const built = await store.buildFrames(drive, both);
+  check('кадры собраны', built.frames.length === 2 && built.missing === 0,
+    JSON.stringify({ frames: built.frames.length, missing: built.missing }));
+  check('снимки скачаны по разу', drive.pulled('photo') === 2,
+    `скачано=${drive.pulled('photo')}`);
+  check('мастер-кадры в памяти не осели', (await blobs.count()) === 0);
+  check('кадры лежат на верстаке', (await bench.count()) === 2);
+  drive.downloads.length = 0;
+  await store.buildFrames(drive, both);
+  check('повторная сборка не качает ничего', drive.pulled('photo') === 0);
+  check('и качать больше нечего', (await store.pendingFrames(both)) === 0);
+  await store.clearBench();
+  check('уход с экрана вытирает верстак', (await bench.count()) === 0);
+  check('после уборки следов сборки нет',
+    (await bench.count()) === 0 && (await blobs.count()) === 0);
 
   caseOf('Снимок качается, когда его правда попросили');
   drive.downloads.length = 0;
   const got = await store.ensureBody(drive, '2026-09-11');
   check('тело приехало', got.body.photo.size > 0);
   check('выровненный кадр пересобран', Boolean(got.body.aligned));
-  check('миниатюра стала своей', got.entry.thumbFrom === 'master');
   check('скачан ровно один снимок', drive.pulled('photo') === 1, `скачано=${drive.pulled('photo')}`);
   drive.downloads.length = 0;
   await store.ensureBody(drive, '2026-09-11');
   check('повторно не качается', drive.pulled('photo') === 0);
-  const missing = await store.missingBodies(['2026-09-10', '2026-09-11']);
-  check('видно, чего ещё нет', missing.length === 1 && missing[0] === '2026-09-10',
-    JSON.stringify(missing));
-  const bulk = await store.ensureBodies(drive, ['2026-09-10', '2026-09-11']);
-  check('пачкой доедет только недостающее', bulk.loaded === 1 && bulk.total === 1,
-    JSON.stringify(bulk));
+  check('соседний день от этого не приехал', !(await blobs.get('2026-09-10')));
+  await store.ensureBody(drive, '2026-09-10');
+  check('и приезжает только по отдельной просьбе',
+    Boolean((await blobs.get('2026-09-10')).photo));
 
   caseOf('Повторное обновление ничего не качает');
   drive.downloads.length = 0;

@@ -38,9 +38,8 @@ export async function createZip(files, onProgress) {
 
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
-    const bytes = await toBytes(f.data);
+    const { part, size, crc } = await measure(f.data);
     const nameBytes = enc.encode(f.name);
-    const crc = crc32(bytes);
     const { time, day } = dosDateTime(f.date || new Date());
 
     const local = new Uint8Array(30 + nameBytes.length);
@@ -52,12 +51,12 @@ export async function createZip(files, onProgress) {
     lv.setUint16(10, time, true);
     lv.setUint16(12, day, true);
     lv.setUint32(14, crc, true);
-    lv.setUint32(18, bytes.length, true);
-    lv.setUint32(22, bytes.length, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
     lv.setUint16(26, nameBytes.length, true);
     local.set(nameBytes, 30);
 
-    chunks.push(local, bytes);
+    chunks.push(local, part);
 
     const cd = new Uint8Array(46 + nameBytes.length);
     const cv = new DataView(cd.buffer);
@@ -69,14 +68,14 @@ export async function createZip(files, onProgress) {
     cv.setUint16(12, time, true);
     cv.setUint16(14, day, true);
     cv.setUint32(16, crc, true);
-    cv.setUint32(20, bytes.length, true);
-    cv.setUint32(24, bytes.length, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
     cv.setUint16(28, nameBytes.length, true);
     cv.setUint32(42, offset, true);
     cd.set(nameBytes, 46);
     central.push(cd);
 
-    offset += local.length + bytes.length;
+    offset += local.length + size;
     if (onProgress) onProgress(i + 1, files.length);
     if (i % 10 === 0) await new Promise(r => setTimeout(r, 0)); // не морозим UI
   }
@@ -93,10 +92,35 @@ export async function createZip(files, onProgress) {
   return new Blob([...chunks, ...central, end], { type: 'application/zip' });
 }
 
-async function toBytes(data) {
-  if (data instanceof Uint8Array) return data;
-  if (typeof data === 'string') return enc.encode(data);
-  return new Uint8Array(await data.arrayBuffer());
+/**
+ * Длина и контрольная сумма файла — не поднимая его в память целиком.
+ *
+ * Наружу отдаётся тот же источник, каким пришёл: снимок остаётся Blob и в
+ * итоговый архив попадает ссылкой. Год фотографий — несколько сотен мегабайт,
+ * и разница между «браузер держит их у себя, при нужде на диске» и «мы
+ * развернули их в Uint8Array» — это разница между собранным архивом и
+ * закрытой вкладкой.
+ */
+async function measure(data) {
+  if (typeof data === 'string') {
+    const bytes = enc.encode(data);
+    return { part: bytes, size: bytes.length, crc: crc32(bytes) };
+  }
+  if (data instanceof Uint8Array) {
+    return { part: data, size: data.length, crc: crc32(data) };
+  }
+  if (typeof data.stream !== 'function') {
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    return { part: bytes, size: bytes.length, crc: crc32(bytes) };
+  }
+  let crc = 0;
+  const reader = data.stream().getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    crc = crc32(value, crc);
+  }
+  return { part: data, size: data.size, crc };
 }
 
 /**

@@ -13,10 +13,18 @@
 // Поэтому календарь показывает галочки, а не миниатюры, а любой показ снимка
 // начинается с загрузки из папки. Платой за это стал трафик, взамен — на
 // телефоне нет ни одной фотографии, которую можно было бы забыть стереть.
+//
+// Единственное исключение — bench, верстак сборки. Собрать год значит держать
+// год кадров одновременно, а это сотни мегабайт: в памяти вкладки телефон их
+// не выносит. Поэтому на время сборки кадры ложатся на диск — и стираются,
+// как только человек ушёл с экрана видео, и ещё раз при запуске, если прошлый
+// заход убили посреди сборки. Верстак не кэш: в нём никогда ничего не ищут,
+// чтобы «не качать повторно завтра».
 
 export const DB_NAME = 'timelapse-baby';
 // 3 — версия, в которой хранилище снимков на диске удалено насовсем.
-const DB_VERSION = 3;
+// 4 — добавлен верстак сборки: временный и самостирающийся.
+const DB_VERSION = 4;
 
 let dbPromise = null;
 
@@ -42,6 +50,9 @@ function open() {
       // вместе со всем, что успело в него лечь на прошлых версиях.
       if (db.objectStoreNames.contains('blobs')) {
         db.deleteObjectStore('blobs');
+      }
+      if (!db.objectStoreNames.contains('bench')) {
+        db.createObjectStore('bench', { keyPath: 'date' });
       }
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
@@ -175,8 +186,53 @@ export const blobs = {
   },
 };
 
-/** Выбросить весь кэш: и карточки, и тела. */
+/**
+ * Верстак сборки: выровненные кадры и ничего кроме них.
+ *
+ * Единственное место, где снимок ложится на диск устройства, и единственное,
+ * где это оправдано: год выровненных кадров — это семьдесят мегабайт, которые
+ * вкладка не удержит в памяти, а собрать видео иначе нельзя. Мастер-кадр сюда
+ * не попадает никогда: он вшестеро тяжелее, а в кадр не идёт.
+ *
+ * Живёт запись ровно столько, сколько человек стоит на экране видео. Ушёл —
+ * clearBench(), и от собранного года на телефоне не остаётся ничего.
+ *
+ * @typedef {Object} Bench
+ * @property {string} date
+ * @property {Blob} aligned
+ * @property {number} size   при каком размере кадра собрано: сменили размер —
+ *                           запись негодна, и это видно без пересчёта
+ */
+
+export const bench = {
+  get(date) {
+    return run('bench', 'readonly', s => s.get(date));
+  },
+
+  put(row) {
+    return run('bench', 'readwrite', s => s.put(row));
+  },
+
+  delete(date) {
+    return run('bench', 'readwrite', s => s.delete(date));
+  },
+
+  clear() {
+    return run('bench', 'readwrite', s => s.clear());
+  },
+
+  allDates() {
+    return run('bench', 'readonly', s => s.getAllKeys());
+  },
+
+  count() {
+    return run('bench', 'readonly', s => s.count());
+  },
+};
+
+/** Выбросить весь кэш: и карточки, и тела, и верстак. */
 export async function clearCache() {
+  await bench.clear();
   await entries.clear();
   await blobs.clear();
 }

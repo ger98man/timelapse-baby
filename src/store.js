@@ -15,9 +15,9 @@
 // поштучно: когда открыли день, когда собирают таймлапс. Календарю хватает
 // миниатюр, которые Google уже сделал сам, — килобайты вместо мегабайт.
 
-import { entries, blobs, settings } from './db.js';
+import { entries, blobs, bench, settings } from './db.js';
 import { toMaster } from './img.js';
-import { deriveFrom } from './align.js';
+import { deriveFrom, renderSquareBlob } from './align.js';
 import { TAG } from './drive.js';
 import { pullProfile } from './profile.js';
 
@@ -165,8 +165,10 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
 
     if (!contentSame) {
       await blobs.delete(day);           // снимок другой — тело устарело целиком
+      await bench.delete(day);
       if (cached) changed++; else added++;
     } else if (!eyesSame) {
+      await bench.delete(day);           // на верстаке кадр по старым глазам
       // Разметку поправили с другого телефона. Если снимок сейчас в памяти —
       // пересобираем выровненный кадр на месте, иначе он соберётся при
       // следующем показе, когда снимок и так будет загружен.
@@ -198,7 +200,7 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
  *
  * День стоит десятков килобайт вместо мегабайтов, поэтому посмотреть год
  * можно, не выкачивая год. В файл такое не годится: за настоящим видео идут
- * оригиналы через ensureBodies.
+ * оригиналы через buildFrames.
  *
  * @param {string[]} dates дни по порядку
  * @param {number} size сторона миниатюры в пикселях
@@ -289,34 +291,100 @@ export async function ensureBody(drive, date, { cfg = null } = {}) {
   return { entry, body };
 }
 
-/** Каких дней ещё нет целиком — чтобы сказать, сколько придётся качать. */
-export async function missingBodies(dates) {
-  const have = new Set(await blobs.allDates());
-  const out = [];
-  for (const date of dates) {
-    if (have.has(date)) continue;
-    const entry = await entries.get(date);
-    if (entry && entry.fileId) out.push(date);
-  }
-  return out;
+// --- верстак сборки ---------------------------------------------------------
+//
+// Собрать год — единственная операция, которой правда нужна вся история сразу,
+// и раньше она шла через ensureBody: 365 мастер-кадров и 365 выровненных, всё
+// это одновременно в памяти вкладки. Полгигабайта — на телефоне вкладку с
+// таким весом система закрывает, не дождавшись конца сборки.
+//
+// Теперь по этому пути идёт только то, что попадёт в кадр, и ложится оно на
+// диск, а не в память. Верстак вытирается при уходе с экрана видео и при
+// запуске: снимкам на устройстве оставаться по-прежнему негде.
+
+/**
+ * Выровненный кадр за день. Три источника, по убыванию дешевизны: снимок уже
+ * в памяти (день только что открывали), верстак (уже собирали в этот заход),
+ * папка.
+ *
+ * Мастер-кадр по дороге не создаётся и никуда не кладётся. Разметка глаз
+ * задана в долях от размера снимка, поэтому одинаково ложится и на оригинал
+ * из папки; скачанный файл живёт до конца следующей строки.
+ */
+async function alignedFor(drive, date, cfg) {
+  const body = await blobs.get(date);
+  if (body && body.aligned) return body.aligned;
+
+  const kept = await bench.get(date);
+  if (kept && kept.size === cfg.videoSize) return kept.aligned;
+
+  const entry = await entries.get(date);
+  if (!entry || !entry.fileId || !drive) return null;
+
+  const raw = await drive.download(entry.fileId);
+  const aligned = await renderSquareBlob(raw, {
+    size: cfg.videoSize, eyes: entry.eyes, target: cfg.eyeTarget, quality: 0.88,
+  });
+  await bench.put({ date, aligned, size: cfg.videoSize });
+  return aligned;
 }
 
-/** Тела пачкой — для таймлапса и для выгрузки архива. */
-export async function ensureBodies(drive, dates, { onProgress = () => {} } = {}) {
+/**
+ * Кадры для сборки — всё, что удалось собрать, и счёт того, что не удалось:
+ * один недокачанный день не должен ронять годовое видео.
+ *
+ * @returns {Promise<{frames: Array<{date:string, blob:Blob}>, missing:number}>}
+ */
+export async function buildFrames(drive, dates, { onProgress = () => {} } = {}) {
   const cfg = await settings.all();
-  const todo = await missingBodies(dates);
-  let loaded = 0, failed = 0;
-  for (let i = 0; i < todo.length; i++) {
-    onProgress(i, todo.length, 'Загружаю кадры');
+  const frames = [];
+  let missing = 0;
+  for (let i = 0; i < dates.length; i++) {
+    onProgress(i, dates.length, 'Готовлю кадры');
+    let blob = null;
     try {
-      await ensureBody(drive, todo[i], { cfg });
-      loaded++;
+      blob = await alignedFor(drive, dates[i], cfg);
     } catch {
-      failed++;      // один недокачанный день не должен ронять всю сборку
+      blob = null;
     }
+    if (blob) frames.push({ date: dates[i], blob });
+    else missing++;
   }
-  onProgress(todo.length, todo.length, 'Загружаю кадры');
-  return { loaded, failed, total: todo.length };
+  onProgress(dates.length, dates.length, 'Готовлю кадры');
+  return { frames, missing };
+}
+
+/**
+ * Мастер-кадр за день — для архива, который состоит из оригиналов.
+ *
+ * Путь тот же: память, верстак, папка. Пережимать скачанное незачем — в папке
+ * лежит ровно то, что приложение туда положило, это и есть мастер.
+ */
+export async function masterFor(drive, date) {
+  const body = await blobs.get(date);
+  if (body && body.photo) return body.photo;
+
+  const kept = await bench.get(date);
+  if (kept && kept.photo) return kept.photo;
+
+  const entry = await entries.get(date);
+  if (!entry || !entry.fileId || !drive) return null;
+
+  const photo = await drive.download(entry.fileId);
+  await bench.put({ ...(kept || {}), date, photo });
+  return photo;
+}
+
+/** Сколько дней промежутка придётся качать — чтобы сказать это до сборки. */
+export async function pendingFrames(dates) {
+  const ready = new Set(await blobs.allDates());
+  for (const date of await bench.allDates()) ready.add(date);
+  return dates.filter(date => !ready.has(date)).length;
+}
+
+/** Верстак больше не нужен: ушли с экрана видео, закончили выгрузку, запустились. */
+export function clearBench() {
+  return bench.clear();
 }
 
 /** Кладёт снимок за день. Сначала папка, потом кэш. */
@@ -346,6 +414,7 @@ export async function putPhoto(drive, date, file) {
     noteStale: false,
     w, h,
   };
+  await bench.delete(date);
   await blobs.put({ date, photo: blob, aligned: derived.aligned });
   await entries.put(entry);
   return entry;
@@ -370,6 +439,7 @@ export async function putEyes(drive, date, eyes) {
   fresh.modifiedTime = res.modifiedTime;
   const derived = await deriveFrom(loaded.body.photo, eyes,
     { size: cfg.videoSize, target: cfg.eyeTarget });
+  await bench.delete(date);          // на верстаке кадр по старым глазам
   await blobs.put({ date, photo: loaded.body.photo, aligned: derived.aligned });
   await entries.put(fresh);
   return fresh;
@@ -412,4 +482,5 @@ export async function removeDay(drive, date) {
   }
   await entries.delete(date);
   await blobs.delete(date);
+  await bench.delete(date);
 }

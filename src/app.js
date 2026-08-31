@@ -23,6 +23,7 @@ const state = {
   video: null,       // последнее собранное видео
   conn: { status: 'unknown', email: '', note: '' },   // связь с Google
   connAt: 0,         // когда её проверяли в последний раз
+  screen: null,      // какой экран открыт — чтобы знать, с какого уходим
 };
 
 // --- мелкие помощники -------------------------------------------------------
@@ -930,40 +931,34 @@ async function allDays() {
   return rows.filter(r => r.fileId).map(r => r.date);
 }
 
-/** Выровненные кадры из того, что уже лежит на телефоне. */
-async function videoFrames() {
-  const out = [];
-  for (const date of await videoDays()) {
-    const body = await blobs.get(date);
-    if (body && body.aligned) out.push({ date, blob: body.aligned });
-  }
-  return out;
-}
-
 /**
  * Кадры для сборки. Здесь и только здесь качается вся история целиком: видео
  * иначе не собрать. Зато человек платит за это осознанно — нажав кнопку, а не
  * открыв приложение.
+ *
+ * Кадры ложатся на верстак, а не в память вкладки: год оригиналов вместе с
+ * год выровненных кадров телефон не удержит. Верстак стирается при уходе с
+ * экрана — store.clearBench().
  */
 async function framesForBuild(days) {
   if (!days) days = await videoDays();
   if (!days.length) return [];
-  const missing = await store.missingBodies(days);
-  if (missing.length) {
-    if (!canPull()) {
-      toast(`Без сети собираю из ${days.length - missing.length} загруженных кадров`, 3600);
-    } else {
-      progressOpen('Загружаю кадры');
-      try {
-        await store.ensureBodies(drive(), days,
-          { onProgress: (d, t, label) => progressSet(d, t, label) });
-      } catch (e) {
-        toast(e.message || 'Не все кадры удалось загрузить');
-      }
-      progressClose();
-    }
+
+  const puller = canPull() ? drive() : null;
+  const pending = await store.pendingFrames(days);
+  if (pending && !puller) {
+    toast(`Без сети собираю из ${days.length - pending} загруженных кадров`, 3600);
   }
-  return videoFrames();
+  if (pending && puller) progressOpen('Готовлю кадры');
+
+  const { frames, missing } = await store.buildFrames(puller, days,
+    { onProgress: (d, t, label) => progressSet(d, t, label) });
+  progressClose();
+
+  if (missing && puller) {
+    toast(`Не удалось загрузить ${missing} ${D.plural(missing, 'кадр', 'кадра', 'кадров')}`);
+  }
+  return frames;
 }
 
 async function refreshVideoInfo() {
@@ -1139,7 +1134,7 @@ function resetPlayer() {
  * @returns {Promise<boolean>} согласился ли человек
  */
 async function confirmRender(days) {
-  const missing = await store.missingBodies(days);
+  const pending = await store.pendingFrames(days);
   const fps = Number($('video-fps').value);
   // Столько же, сколько добавляет buildVideo: разгон рекордера и удержание
   // последнего кадра, иначе таймлапс обрывается на полуслове.
@@ -1160,7 +1155,7 @@ async function confirmRender(days) {
       'в видео. На телефоне ничего из этого не останется.',
     items: [
       ['Кадров', `${days.length} · видео примерно на ${secs.toFixed(1)} с` +
-        (missing.length ? ` · скачаю ${missing.length} из папки` : '')],
+        (pending ? ` · скачаю ${pending} из папки` : '')],
       ['Файл', `${name}, примерно ${formatBytes(bytes)}`],
       ['Куда', shares
         ? 'телефон спросит сам — можно сохранить или сразу отправить'
@@ -1327,6 +1322,13 @@ async function renderStorageCard(total) {
 // --- навигация --------------------------------------------------------------
 
 async function showScreen(name) {
+  // Верстак живёт ровно столько, сколько человек стоит на экране видео.
+  // Ушёл — от собранного года на телефоне не остаётся ничего.
+  if (state.screen === 'video' && name !== 'video') {
+    resetPlayer();
+    await store.clearBench().catch(() => {});
+  }
+  state.screen = name;
   freeUrls();
   for (const s of document.querySelectorAll('.screen')) s.classList.add('hidden');
   $('screen-' + name).classList.remove('hidden');
@@ -1582,21 +1584,14 @@ function bind() {
   $('btn-export').onclick = async () => {
     const dates = await entries.allDates();
     if (!dates.length) { toast('Пока нечего выгружать'); return; }
-    try {
-      // Архив — это оригиналы, поэтому перед выгрузкой их приходится собрать
-      // на телефоне. Второе и последнее место, где это оправдано.
-      const missing = await store.missingBodies(dates);
-      if (missing.length && canPull()) {
-        progressOpen('Загружаю снимки');
-        await store.ensureBodies(drive(), dates,
-          { onProgress: (d, t, label) => progressSet(d, t, label) });
-      }
-    } catch (e) {
-      toast(e.message || 'Не все снимки удалось загрузить');
-    }
     progressOpen('Собираю архив');
     try {
-      const { zip, skipped } = await exportArchive((d, t, label) => progressSet(d, t, label));
+      // Архив — это оригиналы, и на телефоне их нет: они лежат в папке и
+      // качаются по ходу упаковки, на верстак. После выгрузки верстак
+      // вытирается — год фотографий не должен осесть на телефоне только
+      // потому, что архив один раз выгрузили.
+      const { zip, skipped } = await exportArchive(canPull() ? drive() : null,
+        (d, t, label) => progressSet(d, t, label));
       progressClose();
       const name = `${state.cfg.babyName || 'archive'}-${D.todayKey()}.zip`;
       const how = await saveBlob(zip, name);
@@ -1609,6 +1604,8 @@ function bind() {
     } catch (e) {
       progressClose();
       toast(e.message || 'Не удалось собрать архив');
+    } finally {
+      await store.clearBench().catch(() => {});
     }
   };
 
@@ -1685,6 +1682,11 @@ async function boot() {
   }
   applyTheme(state.cfg.theme);
 
+  // Если прошлый заход убили посреди сборки, на верстаке остались кадры.
+  // Это единственное место, где снимок мог пережить закрытие приложения, —
+  // и здесь оно кончается.
+  await store.clearBench().catch(() => {});
+
   // Настройка проходится один раз. Дальше приложение открывается офлайн:
   // иначе оно не работало бы там, где чаще всего и снимают, — в самолёте,
   // в роддоме, на даче без связи.
@@ -1716,10 +1718,14 @@ async function boot() {
 
   // Снимки живут в памяти вкладки. Уходя — стираем и их, и предпросмотр:
   // после закрытия приложения на телефоне не должно остаться ни кадра.
+  // Верстак вытирается тут же, но полагаться на это нельзя: браузер вправе
+  // убить вкладку, не дав транзакции дойти. Настоящая гарантия — уборка при
+  // запуске, она выше.
   window.addEventListener('pagehide', () => {
     freeUrls();
     store.clearPreview();
     blobs.clear();
+    store.clearBench().catch(() => {});
   });
 
   window.addEventListener('online', () => {

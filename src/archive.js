@@ -5,7 +5,7 @@
 // удобная оболочка поверх такой папки. Если через десять лет от кода ничего не
 // останется, архив всё равно откроется чем угодно.
 
-import { entries, blobs, settings } from './db.js';
+import { entries, settings } from './db.js';
 import { createZip, readZip } from './zip.js';
 import * as store from './store.js';
 
@@ -55,15 +55,19 @@ function parseCsv(text) {
 }
 
 /**
- * Собирает архив из того, что лежит на телефоне целиком.
+ * Собирает архив из оригиналов.
  *
- * Снимки качаются по требованию, поэтому дни без тела сюда просто не попадут —
- * их число возвращается отдельно, чтобы человеку не пришлось догадываться,
- * почему в архиве меньше файлов, чем дней в календаре.
+ * На телефоне их нет: снимки лежат в папке и качаются по ходу упаковки, на
+ * верстак, который вытирается сразу после выгрузки. Год фотографий не должен
+ * оседать на устройстве только потому, что архив один раз выгрузили.
+ *
+ * Без сети (drive = null) дни без снимка просто не попадут в архив — их число
+ * возвращается отдельно, чтобы человеку не пришлось догадываться, почему в
+ * архиве меньше файлов, чем дней в календаре.
  *
  * @returns {Promise<{zip: Blob, days: number, skipped: number}>}
  */
-export async function exportArchive(onProgress) {
+export async function exportArchive(drive, onProgress) {
   const dates = await entries.allDates();
   const cfg = await settings.all();
   const files = [];
@@ -74,14 +78,19 @@ export async function exportArchive(onProgress) {
     const date = dates[i];
     const e = await entries.get(date);
     if (!e) continue;
-    const body = await blobs.get(date);
     const [y, m] = date.split('-');
     const stamp = new Date(e.modifiedTime || date);
-    if (body && body.photo) {
-      files.push({ name: `${y}/${m}/${date}.jpg`, data: body.photo, date: stamp });
+    let photo = null;
+    try {
+      photo = await store.masterFor(drive, date);
+    } catch {
+      photo = null;   // один недоступный день не должен ронять весь архив
+    }
+    if (photo) {
+      files.push({ name: `${y}/${m}/${date}.jpg`, data: photo, date: stamp });
       packed++;
     } else {
-      skipped++;      // снимок ещё не скачан на этот телефон
+      skipped++;      // снимка нет ни на телефоне, ни в папке
     }
     if (e.comment && e.comment.trim()) {
       files.push({ name: `${y}/${m}/${date}.txt`, data: e.comment, date: stamp });
