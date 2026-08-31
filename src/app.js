@@ -376,11 +376,12 @@ async function connectGoogle(btn = null) {
 /**
  * Первым делом — связь. Пока непонятно, дойдёт ли снятое до общей папки,
  * пускать в приложение нечестно: человек снимет день, а кадр осядет на
- * телефоне. Но и запирать нельзя — снимают и в самолёте, и на даче без
- * связи, поэтому из ворот всегда есть выход «продолжить без Google».
+ * телефоне и не попадёт ни второму родителю, ни на новый телефон. Поэтому
+ * из ворот один выход — войти в Google.
  */
 async function runGate() {
   const gate = $('gate');
+  const retry = $('gate-retry');
   const showFail = () => {
     const off = state.conn.status === 'off';
     $('gate-mark').className = 'conn-mark big bad';
@@ -392,13 +393,10 @@ async function runGate() {
       : navigator.onLine
         ? 'Доступ к папке нужно выдать заново — это один тап, ' +
           'ничего вводить не придётся.'
-        : 'Похоже, сейчас нет сети. Снимать можно и так, но кадры уедут ' +
-          'в папку только когда связь появится.';
+        : 'Похоже, сейчас нет сети. Войти получится, когда связь появится.';
     $('gate-error').textContent = '';
-    $('gate-retry').textContent = off ? 'Подключить Google' : 'Переподключить Google';
-    $('gate-retry').classList.remove('hidden');
-    $('gate-skip').textContent = 'Продолжить без Google';
-    $('gate-skip').classList.remove('hidden');
+    $('gate-retry-label').textContent = off ? 'Подключить Google' : 'Переподключить Google';
+    retry.classList.remove('hidden');
     gate.classList.remove('hidden');
   };
 
@@ -409,8 +407,7 @@ async function runGate() {
     $('gate-mark').innerHTML = '';
     $('gate-title').textContent = 'Проверяю связь с Google…';
     $('gate-text').textContent = 'Секунду — смотрю, отвечает ли Диск и жив ли доступ к папке.';
-    $('gate-retry').classList.add('hidden');
-    $('gate-skip').classList.add('hidden');
+    retry.classList.add('hidden');
     gate.classList.remove('hidden');
   }, 400);
 
@@ -427,17 +424,22 @@ async function runGate() {
 
   showFail();
   await new Promise(resolve => {
-    $('gate-retry').onclick = async () => {
+    retry.onclick = async () => {
       $('gate-error').textContent = '';
+      // Без сети окно Google не откроется и молча ничего не произойдёт —
+      // честнее сказать это сразу, чем оставить человека жать на кнопку.
+      if (!navigator.onLine) {
+        $('gate-error').textContent = 'Нет сети — Google не откроется';
+        return;
+      }
       try {
-        await connectGoogle($('gate-retry'));
+        await connectGoogle(retry);
         resolve();
       } catch (e) {
         showFail();
         $('gate-error').textContent = e.message || 'Не получилось войти';
       }
     };
-    $('gate-skip').onclick = () => resolve();
   });
   gate.classList.add('hidden');
 }

@@ -69,6 +69,10 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 .cover-inner { width: 100%; max-width: 380px; }
 .cover-inner .btn { width: 100%; margin-top: 8px; }
 .cover-title { font-size: 30px; font-weight: 680; margin: 0 0 10px; letter-spacing: -0.02em; }
+/* Значок связи стоит в строке с заголовком: галочка или крестик — часть
+   фразы «Google не отвечает», а не отдельная картинка над ней. */
+.cover-head { display: flex; align-items: center; gap: 14px; margin: 0 0 10px; }
+.cover-head .cover-title { margin: 0; }
 .cover-sub { color: var(--muted); font-size: 15px; line-height: 1.55; margin: 0 0 26px; }
 .lock-mark {
   position: relative;
@@ -379,11 +383,11 @@ body.has-conn { --conn-h: 37px; }
 .conn-mark.bad { background: var(--danger); }
 .conn-mark.wait { background: var(--surface-2); color: var(--muted); }
 .conn-mark.big {
-  width: 62px; height: 62px; margin: 0 0 20px;
+  width: 46px; height: 46px; margin: 0;
   box-shadow: 0 8px 22px rgba(0,0,0,.28);
 }
 .conn-mark.big.wait::after {
-  content: ""; width: 24px; height: 24px; border-radius: 50%;
+  content: ""; width: 20px; height: 20px; border-radius: 50%;
   border: 2.5px solid var(--line); border-top-color: var(--accent);
   animation: spin .9s linear infinite;
 }
