@@ -219,6 +219,9 @@ async function runSync() {
     await renderMore();
   } catch (e) {
     progressClose();
+    // Папка пропала (удалили, переименовали, вошли другим аккаунтом) —
+    // отправлять человека искать её самому незачем, спрашиваем прямо здесь.
+    if (e && e.code === 'no-folder' && await ensureAlbumFolder()) return runSync();
     toast(e.message || 'Не удалось обновить из папки');
     await checkConnection();      // не вышло — полоска должна честно покраснеть
   }
@@ -264,7 +267,14 @@ function syncQuietly() {
       if (state.conn.status !== 'ok') setConn('ok', c.driveEmail, 'Подключен к Google');
       if (!$('screen-calendar').classList.contains('hidden')) return renderCalendar();
     })
-    .catch(() => checkConnection().catch(() => { /* обновится при следующей возможности */ }));
+    .catch(e => {
+      // Единственное, о чём тихая попытка молчать не имеет права: папки нет,
+      // а значит снятому сегодня некуда деться. Спрашиваем сразу.
+      if (e && e.code === 'no-folder') {
+        return ensureAlbumFolder().then(ok => { if (ok) syncQuietly(); });
+      }
+      return checkConnection().catch(() => { /* обновится при следующей возможности */ });
+    });
 }
 
 // --- связь с Google: полоска в шапке и проверка на входе ---------------------
@@ -361,6 +371,95 @@ function renderConn() {
 }
 
 /**
+ * Спрашивает, кто пришёл, и заводит либо подключает папку.
+ *
+ * Молча создавать её нельзя: у второго родителя рядом с общим альбомом
+ * появится свой пустой, он начнёт снимать туда и узнает об этом нескоро.
+ * @returns {Promise<boolean>} появилась ли папка
+ */
+async function askWhoYouAre() {
+  const box = $('folder-gate');
+  const err = $('folder-gate-error');
+  const create = $('folder-gate-create');
+  const pick = $('folder-gate-pick');
+  err.textContent = '';
+  // Без Picker API выбрать чужую папку нечем — предлагать нечестно.
+  pick.classList.toggle('hidden', !pickerReady());
+  box.classList.remove('hidden');
+
+  const got = await new Promise(resolve => {
+    const busy = on => { create.disabled = on; pick.disabled = on; };
+    create.onclick = async () => {
+      err.textContent = '';
+      busy(true);
+      try {
+        const root = await drive().createRoot(rootName(GOOGLE.folderName, state.cfg.driveEmail));
+        await settings.merge({ driveFolderId: root.id, driveFolderName: root.name });
+        toast(`Папка «${root.name}» создана`);
+        resolve(true);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось создать папку';
+      } finally {
+        busy(false);
+      }
+    };
+    pick.onclick = async () => {
+      err.textContent = '';
+      busy(true);
+      try {
+        const token = await G.getAccessToken({ interactive: true });
+        const folder = await pickFolder(token);
+        if (!folder) return;
+        await drive().adoptRoot(folder.id);
+        await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
+        toast(`Папка «${folder.name}» подключена`);
+        resolve(true);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось выбрать папку';
+      } finally {
+        busy(false);
+      }
+    };
+    $('folder-gate-later').onclick = () => resolve(false);
+  });
+
+  box.classList.add('hidden');
+  create.onclick = pick.onclick = $('folder-gate-later').onclick = null;
+  state.cfg = await settings.all();
+  return got;
+}
+
+/**
+ * Папка альбома сразу после входа: ищем её в Диске, а если не нашли —
+ * спрашиваем, первый родитель пришёл или уже второй. Раньше это умел только
+ * мастер настройки, и попасть туда можно было лишь кнопкой в «Настройках».
+ * @returns {Promise<boolean>} есть ли теперь папка
+ */
+async function ensureAlbumFolder() {
+  if (!configured() || !state.cfg.driveEmail) return false;
+  let root;
+  try {
+    root = await drive().findRoot(state.cfg.driveFolderId);
+  } catch (e) {
+    // Не дозвонились до Диска — предлагать «завести папку» тут нельзя:
+    // именно так рядом со старым альбомом и появляется второй.
+    toast(e.message || 'Google Диск не ответил');
+    return false;
+  }
+  if (!root) return askWhoYouAre();
+
+  const name = await drive().nameRoot(root, state.cfg.driveEmail);
+  const patch = {};
+  if (root.id !== state.cfg.driveFolderId) patch.driveFolderId = root.id;
+  if (name !== state.cfg.driveFolderName) patch.driveFolderName = name;
+  if (Object.keys(patch).length) {
+    await settings.merge(patch);
+    state.cfg = await settings.all();
+  }
+  return true;
+}
+
+/**
  * Вход руками: человек нажал «Подключить» или «Переподключить».
  * @param {HTMLElement|null} btn кнопку гасим, пока Google думает
  */
@@ -379,6 +478,8 @@ async function connectGoogle(btn = null) {
     await settings.set('driveEmail', me.email);
     state.cfg = await settings.all();
     setConn('ok', me.email, 'Подключен к Google');
+    // Вход без папки — это ещё не подключённое приложение: снимать некуда.
+    await ensureAlbumFolder();
     return true;
   } catch (e) {
     await checkConnection();
@@ -470,17 +571,17 @@ async function renderGoogleCard() {
       'поэтому Диск недоступен: приложение работает локально, а архив ' +
       'выгружается вручную. Это чинится на стороне того, кто выкладывал сборку.';
     ['btn-sync', 'drive-link', 'btn-pick-folder', 'btn-google-off', 'google-hint',
-      'btn-wizard', 'btn-google-connect'].forEach(id => show(id, false));
+      'btn-google-connect'].forEach(id => show(id, false));
     return;
   }
   show('google-hint', true);
-  show('btn-wizard', true);
-  $('btn-wizard').textContent = 'Пройти настройку заново';
 
   const cfg = state.cfg;
   const connected = Boolean(cfg.driveEmail);
   const token = G.currentToken();
 
+  // Всё, что раньше делала кнопка «Пройти настройку заново», приложение делает
+  // само при входе: ищет папку, а если её нет — спрашивает, кто пришёл.
   show('btn-google-connect', !connected);
   show('btn-sync', connected);
   show('btn-pick-folder', connected);
@@ -1372,29 +1473,18 @@ function bind() {
     }
   };
 
-  $('btn-wizard').onclick = async () => {
-    await runOnboarding({ onToast: toast });
-    state.cfg = await settings.all();
-    applyTheme(state.cfg.theme);
-    await checkConnection();
-    freeUrls();
-    await renderMore();
-    await renderToday();
-  };
-
+  // Вход из «Настроек»: сам разберётся и с аккаунтом, и с папкой.
   $('btn-google-connect').onclick = async () => {
     try {
-      const { accessToken } = await G.requestToken({ interactive: true, chooseAccount: true });
-      const me = await G.fetchUserInfo(accessToken);
-      if (!G.emailAllowed(me.email)) { G.forget(); toast('Этот аккаунт в список не входит'); return; }
-      await settings.set('driveEmail', me.email);
-      state.cfg = await settings.all();
-      setConn('ok', me.email, 'Подключен к Google');
-      await renderGoogleCard();
-      await runSync();
+      await connectGoogle($('btn-google-connect'));
     } catch (e) {
       toast(e.message || 'Не получилось подключить Google');
+      return;
     }
+    freeUrls();
+    await renderGoogleCard();
+    await runSync();
+    await renderToday();
   };
 
   $('btn-sync').onclick = runSync;

@@ -517,6 +517,22 @@
   </div>
 </div>
 
+<!-- Папки нет — надо понять, кто пришёл. Молча завести её нельзя: у второго
+     родителя рядом с общим альбомом появится свой пустой, и он будет снимать
+     не туда, ничего не подозревая. -->
+<div id="folder-gate" class="overlay hidden">
+  <div class="ask-box">
+    <h2>Куда складывать снимки?</h2>
+    <p class="hint">Папки для альбома пока нет. Если альбом заводите вы — создам её
+      в вашем Google Диске. Если снимать уже начал второй родитель — выберите
+      его папку, тогда оба будете снимать в один альбом.</p>
+    <p id="folder-gate-error" class="error"></p>
+    <button id="folder-gate-create" class="btn btn-primary full">Я первый — завести папку</button>
+    <button id="folder-gate-pick" class="btn full">Я второй — выбрать общую папку</button>
+    <button id="folder-gate-later" class="btn btn-quiet full">Не сейчас</button>
+  </div>
+</div>
+
 <div id="progress" class="overlay hidden">
   <div class="progress-box">
     <p id="progress-label">Работаю…</p>
