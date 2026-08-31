@@ -36,6 +36,19 @@
 </head>
 <body>
 
+<!-- Проверка связи с Google. Показывается до приложения: пока непонятно, жив ли
+     доступ к папке, человеку нельзя обещать, что снятое куда-то уедет. -->
+<div id="gate" class="cover hidden">
+  <div class="cover-inner">
+    <div id="gate-mark" class="conn-mark big wait"></div>
+    <h1 class="cover-title" id="gate-title">Проверяю связь с Google…</h1>
+    <p class="cover-sub" id="gate-text">Секунду — смотрю, отвечает ли Диск и жив ли доступ к папке.</p>
+    <p id="gate-error" class="error"></p>
+    <button id="gate-retry" class="btn btn-primary hidden">Переподключить Google</button>
+    <button id="gate-skip" class="btn btn-quiet hidden">Продолжить без Google</button>
+  </div>
+</div>
+
 <!-- Онбординг -->
 <div id="wizard" class="cover hidden">
   <div class="wiz">
@@ -204,6 +217,17 @@
 
 <!-- Приложение -->
 <main id="app" class="hidden">
+
+  <!-- Состояние связи: видно с любого экрана, потому что от него зависит,
+       уедет ли снятое в общую папку или осядет только на этом телефоне. -->
+  <div id="conn" class="conn hidden" role="status" aria-live="polite">
+    <span id="conn-mark" class="conn-mark"></span>
+    <span class="conn-text">
+      <b id="conn-email"></b>
+      <span id="conn-note"></span>
+    </span>
+    <button id="conn-fix" class="conn-fix hidden">Переподключить</button>
+  </div>
 
   <!-- Сегодня -->
   <section id="screen-today" class="screen">

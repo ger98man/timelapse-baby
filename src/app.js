@@ -22,6 +22,8 @@ const state = {
   align: null,       // контекст оверлея разметки глаз
   video: null,       // последнее собранное видео
   previewAbort: null,
+  conn: { status: 'unknown', email: '', note: '' },   // связь с Google
+  connAt: 0,         // когда её проверяли в последний раз
 };
 
 // --- мелкие помощники -------------------------------------------------------
@@ -188,6 +190,7 @@ async function runSync() {
       onProgress: (d, t, label) => progressSet(d, t, label),
     });
     progressClose();
+    setConn('ok', state.cfg.driveEmail, 'на связи');
     const parts = [];
     if (res.added) parts.push(`новых дней: ${res.added}`);
     if (res.changed) parts.push(`обновлено: ${res.changed}`);
@@ -202,6 +205,7 @@ async function runSync() {
   } catch (e) {
     progressClose();
     toast(e.message || 'Не удалось обновить из папки');
+    await checkConnection();      // не вышло — полоска должна честно покраснеть
   }
 }
 
@@ -242,9 +246,191 @@ function syncQuietly() {
     .then(c => {
       state.cfg = c;
       applyTheme(c.theme);
+      if (state.conn.status !== 'ok') setConn('ok', c.driveEmail, 'на связи');
       if (!$('screen-calendar').classList.contains('hidden')) return renderCalendar();
     })
-    .catch(() => { /* обновится при следующей возможности */ });
+    .catch(() => checkConnection().catch(() => { /* обновится при следующей возможности */ }));
+}
+
+// --- связь с Google: полоска в шапке и проверка на входе ---------------------
+
+const ICON_OK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.6 4.5L19 7.5" ' +
+  'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_BAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" ' +
+  'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>';
+
+/**
+ * Живая проверка связи. Смотреть на срок годности сохранённого токена мало:
+ * доступ отзывают в настройках Google, пароль меняют, а токен всё ещё «свежий».
+ * Поэтому спрашиваем у Google, кто мы, — заодно узнаём почту.
+ * @returns {Promise<{email:string}|null>} null — связи нет
+ */
+async function pingGoogle() {
+  const stored = G.currentToken();
+  if (stored) {
+    try { return await G.fetchUserInfo(stored.accessToken); }
+    catch { G.forget(); }     // токен мёртв — выбрасываем, чтобы не носить его дальше
+  }
+  // Одна тихая попытка получить новый: если сессия Google в браузере жива,
+  // человек ничего не заметит.
+  try {
+    const t = await G.requestToken({ interactive: false });
+    return await G.fetchUserInfo(t.accessToken);
+  } catch {
+    return null;
+  }
+}
+
+function setConn(status, email, note) {
+  state.conn = { status, email, note };
+  state.connAt = Date.now();
+  renderConn();
+  return state.conn;
+}
+
+/**
+ * @returns {Promise<{status:string,email:string,note:string}>}
+ *   ok — Google отвечает; bad — не отвечает или доступ отозван;
+ *   off — аккаунт вообще не подключён (приложение живёт локально).
+ */
+async function checkConnection() {
+  const cfg = state.cfg;
+  if (!configured()) return setConn('none', '', '');
+  if (!cfg.driveEmail) return setConn('off', '', 'Google не подключён');
+  if (!navigator.onLine) return setConn('bad', cfg.driveEmail, 'нет сети');
+
+  const me = await pingGoogle();
+  if (!me) return setConn('bad', cfg.driveEmail, 'нет доступа');
+
+  // Вошли другой почтой — в полоске должна быть та, что на самом деле.
+  if (me.email && me.email !== cfg.driveEmail) {
+    await settings.set('driveEmail', me.email);
+    state.cfg = await settings.all();
+  }
+  return setConn('ok', me.email || cfg.driveEmail, 'на связи');
+}
+
+function renderConn() {
+  const bar = $('conn');
+  const { status, email, note } = state.conn;
+
+  // Сборка без ключа Google — полоски нет: обещать в ней нечего.
+  const visible = status !== 'none';
+  bar.classList.toggle('hidden', !visible);
+  document.body.classList.toggle('has-conn', visible);
+  if (!visible) return;
+
+  const ok = status === 'ok';
+  $('conn-mark').className = 'conn-mark ' + (ok ? 'ok' : 'bad');
+  $('conn-mark').innerHTML = ok ? ICON_OK : ICON_BAD;
+  $('conn-email').textContent = email || 'Google не подключён';
+  $('conn-note').textContent = email ? '· ' + note : '';
+  bar.title = ok ? `${email} — снятое уезжает в папку` : note;
+
+  // Без сети переподключаться некуда: окно Google просто не откроется.
+  // Связь вернётся — полоска позеленеет сама, кнопка тут только мешала бы.
+  const fix = $('conn-fix');
+  const offer = !ok && navigator.onLine;
+  fix.classList.toggle('hidden', !offer);
+  fix.textContent = email ? 'Переподключить' : 'Подключить';
+  bar.classList.toggle('has-fix', offer);
+}
+
+/**
+ * Вход руками: человек нажал «Подключить» или «Переподключить».
+ * @param {HTMLElement|null} btn кнопку гасим, пока Google думает
+ */
+async function connectGoogle(btn = null) {
+  if (btn) btn.disabled = true;
+  try {
+    // Выбор аккаунта показываем только тем, кто ещё не входил: у остальных
+    // почта известна, и переспрашивать каждый раз — лишний шаг.
+    const chooseAccount = !state.cfg.driveEmail;
+    const { accessToken } = await G.requestToken({ interactive: true, chooseAccount });
+    const me = await G.fetchUserInfo(accessToken);
+    if (!G.emailAllowed(me.email)) {
+      G.forget();
+      throw new Error('Этот аккаунт не в списке разрешённых');
+    }
+    await settings.set('driveEmail', me.email);
+    state.cfg = await settings.all();
+    setConn('ok', me.email, 'на связи');
+    return true;
+  } catch (e) {
+    await checkConnection();
+    throw e;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * Первым делом — связь. Пока непонятно, дойдёт ли снятое до общей папки,
+ * пускать в приложение нечестно: человек снимет день, а кадр осядет на
+ * телефоне. Но и запирать нельзя — снимают и в самолёте, и на даче без
+ * связи, поэтому из ворот всегда есть выход «продолжить без Google».
+ */
+async function runGate() {
+  const gate = $('gate');
+  const showFail = () => {
+    const off = state.conn.status === 'off';
+    $('gate-mark').className = 'conn-mark big bad';
+    $('gate-mark').innerHTML = ICON_BAD;
+    $('gate-title').textContent = off ? 'Google не подключён' : 'Google не отвечает';
+    $('gate-text').textContent = off
+      ? 'Без него фотографии останутся только на этом телефоне: ни второму ' +
+        'родителю, ни на новый телефон они не попадут.'
+      : navigator.onLine
+        ? 'Доступ к папке нужно выдать заново — это один тап, ' +
+          'ничего вводить не придётся.'
+        : 'Похоже, сейчас нет сети. Снимать можно и так, но кадры уедут ' +
+          'в папку только когда связь появится.';
+    $('gate-error').textContent = '';
+    $('gate-retry').textContent = off ? 'Подключить Google' : 'Переподключить Google';
+    $('gate-retry').classList.remove('hidden');
+    $('gate-skip').textContent = 'Продолжить без Google';
+    $('gate-skip').classList.remove('hidden');
+    gate.classList.remove('hidden');
+  };
+
+  // Проверка обычно занимает доли секунды. Мигать ради неё целым экраном
+  // незачем — показываем его, только если Google задумался.
+  const wait = setTimeout(() => {
+    $('gate-mark').className = 'conn-mark big wait';
+    $('gate-mark').innerHTML = '';
+    $('gate-title').textContent = 'Проверяю связь с Google…';
+    $('gate-text').textContent = 'Секунду — смотрю, отвечает ли Диск и жив ли доступ к папке.';
+    $('gate-retry').classList.add('hidden');
+    $('gate-skip').classList.add('hidden');
+    gate.classList.remove('hidden');
+  }, 400);
+
+  await checkConnection();
+  clearTimeout(wait);
+
+  // Останавливаем только тех, у кого связь была и пропала. Тому, кто Google
+  // отключил сам, незачем на каждом запуске отвечать на один и тот же вопрос:
+  // ему хватит красного крестика в полоске.
+  if (state.conn.status !== 'bad') {
+    gate.classList.add('hidden');
+    return;
+  }
+
+  showFail();
+  await new Promise(resolve => {
+    $('gate-retry').onclick = async () => {
+      $('gate-error').textContent = '';
+      try {
+        await connectGoogle($('gate-retry'));
+        resolve();
+      } catch (e) {
+        showFail();
+        $('gate-error').textContent = e.message || 'Не получилось войти';
+      }
+    };
+    $('gate-skip').onclick = () => resolve();
+  });
+  gate.classList.add('hidden');
 }
 
 async function renderGoogleCard() {
@@ -1073,10 +1259,22 @@ function bind() {
   $('btn-rebuild').onclick = rebuildAll;
 
   // Google
+  $('conn-fix').onclick = async () => {
+    try {
+      await connectGoogle($('conn-fix'));
+      toast('Google на связи');
+      await renderGoogleCard();
+      syncQuietly();
+    } catch (e) {
+      toast(e.message || 'Не получилось подключить Google');
+    }
+  };
+
   $('btn-wizard').onclick = async () => {
     await runOnboarding({ onToast: toast });
     state.cfg = await settings.all();
     applyTheme(state.cfg.theme);
+    await checkConnection();
     freeUrls();
     await renderMore();
     await renderToday();
@@ -1089,6 +1287,7 @@ function bind() {
       if (!G.emailAllowed(me.email)) { G.forget(); toast('Этот аккаунт в список не входит'); return; }
       await settings.set('driveEmail', me.email);
       state.cfg = await settings.all();
+      setConn('ok', me.email, 'на связи');
       await renderGoogleCard();
       await runSync();
     } catch (e) {
@@ -1124,6 +1323,7 @@ function bind() {
     await G.revoke();
     await settings.merge({ driveEmail: null });
     state.cfg = await settings.all();
+    setConn('off', '', 'Google не подключён');
     await renderGoogleCard();
     toast('Google отключён');
   };
@@ -1244,6 +1444,10 @@ async function boot() {
     justSetUp = true;
   }
 
+  // Первым делом — связь с Google, и только потом приложение: человек должен
+  // войти уже зная, уедет ли снятое сегодня в общую папку.
+  await runGate();
+
   const now = new Date();
   state.calYear = now.getFullYear();
   state.calMonth = now.getMonth();
@@ -1260,8 +1464,19 @@ async function boot() {
   if (justSetUp && configured() && state.cfg.driveEmail) await runSync();
   else syncQuietly();
 
-  window.addEventListener('online', () => { applyOnlineState(); syncQuietly(); });
-  window.addEventListener('offline', applyOnlineState);
+  window.addEventListener('online', () => {
+    applyOnlineState();
+    checkConnection().then(() => syncQuietly());
+  });
+  window.addEventListener('offline', () => { applyOnlineState(); checkConnection(); });
+
+  // Токен живёт час, и за это время приложение обычно успевают свернуть.
+  // Возвращаются к нему — перепроверяем, чтобы галочка не врала.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || Date.now() - state.connAt < 300000) return;
+    checkConnection();
+  });
+
   applyOnlineState();
 }
 

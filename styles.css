@@ -11,6 +11,7 @@
   --accent-soft: rgba(232,132,92,.18);
   --on-accent: #1A1210;             /* текст поверх заливки акцентом */
   --danger: #C4634F;
+  --ok: #57A773;                     /* «Google на связи» */
   --danger-press: #A9503E;
   --faint: #5C5450;
   --tabbar-bg: rgba(18,16,14,.92);
@@ -161,7 +162,7 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 .screen { padding-bottom: calc(var(--tabbar) + 16px); min-height: 100vh; }
 .head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 18px 20px 14px; position: sticky; top: 0; z-index: 5;
+  padding: 18px 20px 14px; position: sticky; top: var(--conn-h, 0px); z-index: 5;
   background: linear-gradient(var(--bg) 72%, transparent);
 }
 .head h1 { flex: 1; }
@@ -269,6 +270,62 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 .card .btn:not(.btn-primary) { background: var(--surface-2); }
 .footer-note { color: var(--faint); font-size: 12px; text-align: center; margin: 26px 0 10px; }
+
+/* ---- Полоска связи с Google ---- */
+body.has-conn { --conn-h: 37px; }
+.conn {
+  position: sticky; top: 0; z-index: 8;
+  display: flex; align-items: center; gap: 9px;
+  min-height: 37px; padding: 6px 14px 6px 16px;
+  background: var(--tabbar-bg); backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px; color: var(--muted);
+}
+.conn-text { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+/* Почта — главное в полоске: на узком экране первой ужимается приписка,
+   а не она. Иначе от «какой аккаунт» остаётся одна буква. */
+#conn-email {
+  flex: 0 1 auto; min-width: 0; color: var(--text); font-weight: 550;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#conn-note {
+  flex: 0 8 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conn-fix {
+  flex: none; border: 0; border-radius: 9px; padding: 5px 11px;
+  background: var(--accent); color: var(--on-accent);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.conn-fix:active { background: var(--accent-press); }
+.conn-fix[disabled] { opacity: .55; }
+
+/* На узком экране кнопка и почта важнее приписки: почему именно связи нет,
+   подробно рассказывают ворота на входе и карточка Google в «Ещё». */
+@media (max-width: 430px) {
+  .conn.has-fix #conn-note { display: none; }
+}
+
+/* Галочка или крестик — одинаковые и в полоске, и на весь экран при проверке */
+.conn-mark {
+  flex: none; width: 19px; height: 19px; border-radius: 50%;
+  display: grid; place-items: center; color: #fff;
+  background: var(--faint);
+}
+.conn-mark svg { width: 64%; height: 64%; }
+.conn-mark.ok { background: var(--ok); }
+.conn-mark.bad { background: var(--danger); }
+.conn-mark.wait { background: var(--surface-2); color: var(--muted); }
+.conn-mark.big {
+  width: 62px; height: 62px; margin: 0 0 20px;
+  box-shadow: 0 8px 22px rgba(0,0,0,.28);
+}
+.conn-mark.big.wait::after {
+  content: ""; width: 24px; height: 24px; border-radius: 50%;
+  border: 2.5px solid var(--line); border-top-color: var(--accent);
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- Табы ---- */
 .tabs {
