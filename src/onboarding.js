@@ -144,7 +144,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       $('wiz-folder-text').textContent =
         'Готово. Всё, что вы снимете, будет складываться сюда.';
       $('wiz-folder-name').textContent = name;
-      $('wiz-folder-link').href = `https://drive.google.com/drive/folders/${root.id}`;
       $('wiz-folder-ok').classList.remove('hidden');
       // Выход есть всегда, а не только когда папку не нашли: приложение могло
       // наткнуться на старую свою папку, а человек пришёл в общую.
@@ -162,13 +161,23 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
         }
         await settings.merge(patch);
+      }
+
+      // Спрашивать «про кого снимаем» есть смысл, только если ответа нет
+      // нигде. Дата могла приехать из папки, а могла остаться с прошлого
+      // захода на этом же телефоне — переспрашивать записанное незачем.
+      const known = await settings.all();
+      if (known.birthDate) {
         dropStep('baby');
+        renderChrome();
+      }
+
+      if (remote && remote.birthDate) {
         const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
         $('wiz-folder-text').textContent = state.remoteDays
           ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
             'Они появятся в приложении, вводить ничего не нужно.'
           : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
-        renderChrome();
       } else if (state.remoteDays) {
         $('wiz-folder-text').textContent =
           `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении.`;
