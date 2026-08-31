@@ -234,7 +234,9 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: var(--surface); border: 1px solid var(--line);
   display: grid; place-items: center; position: relative;
 }
-.photo-slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-slot img, .photo-slot canvas {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
 .photo-empty { color: var(--muted); text-align: center; padding: 20px; }
 .photo-empty p { font-size: 14px; margin: 12px 0 0; }
 .photo-slot .badge {

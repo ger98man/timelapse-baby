@@ -127,6 +127,11 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
     onProgress(i + 1, days.length, 'Читаю опись папки');
     if (!slot.photo) continue;
 
+    // Ссылка на миниатюру приехала этим же запросом и стоила ноль. Запоминаем
+    // её здесь, чтобы показу дня и предпросмотру не пришлось ходить за описью
+    // второй раз.
+    rememberThumb(day, slot.photo.thumbnailLink);
+
     const cached = await entries.get(day);
     const noteId = slot.note ? slot.note.id : null;
     const noteModified = slot.note ? slot.note.modifiedTime : null;
@@ -190,42 +195,75 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
   return { added, changed, dropped, days: days.length, rootId };
 }
 
+// --- миниатюры Диска --------------------------------------------------------
+//
+// Их делает сам Google, они приезжают ссылками вместе с описью папки и весят
+// килобайты. Отсюда всё, что в приложении показывается быстро: и предпросмотр
+// таймлапса, и лицо в карточке дня, пока едет оригинал.
+//
+// Скачать миниатюру запросом нельзя — сервер картинок не отдаёт заголовок
+// CORS, и fetch с токеном там всегда падает. Зато обычная <img> её показывает,
+// поэтому наружу отдаются ссылки, а загрузку берёт на себя тот, кто рисует.
+// Читать холст обратно после этого нельзя, но показу это и не нужно: за
+// настоящим видео идут оригиналы через buildFrames.
+
+/** Сторона миниатюры задана прямо в ссылке — подставляем свою. */
+function sizedThumb(link, size) {
+  return /=s\d+/.test(link)
+    ? link.replace(/=s\d+.*$/, `=s${size}`)
+    : `${link}=s${size}`;
+}
+
 /**
- * Кадры для предпросмотра — миниатюры, которые Google делает сам.
- *
- * Возвращаем ссылки, а не файлы: скачать миниатюру запросом нельзя — сервер
- * картинок не отдаёт заголовок CORS, и fetch с токеном там всегда падает.
- * Зато обычная <img> её показывает, поэтому загрузку берёт на себя тот, кто
- * рисует, а холст просто не читают обратно в файл.
- *
- * День стоит десятков килобайт вместо мегабайтов, поэтому посмотреть год
- * можно, не выкачивая год. В файл такое не годится: за настоящим видео идут
- * оригиналы через buildFrames.
+ * Запоминает ссылку на миниатюру дня. Зовётся из обновления описи, поэтому
+ * показу обычно не приходится ходить в Диск отдельно: ссылки приехали тем же
+ * запросом, которым читалась опись.
+ */
+function rememberThumb(day, link) {
+  if (link) previewCache.set(day, link);
+  else previewCache.delete(day);
+}
+
+/** Добрать ссылки описью папки — один запрос на всю историю. */
+async function fillThumbs(drive) {
+  for (const f of await drive.listDayFiles()) {
+    const p = f.appProperties || {};
+    if (!p.day || p.kind === 'note') continue;
+    rememberThumb(p.day, f.thumbnailLink);
+  }
+}
+
+/**
+ * Кадры для предпросмотра таймлапса. День стоит десятков килобайт вместо
+ * мегабайтов, поэтому посмотреть год можно, не выкачивая год.
  *
  * @param {string[]} dates дни по порядку
  * @param {number} size сторона миниатюры в пикселях
  * @returns {Promise<Array<{date:string, url:string, eyes:?Object}>>}
  */
 export async function previewFrames(drive, dates, { size = 540 } = {}) {
-  const need = dates.some(d => !previewCache.has(d));
-  if (need) {
-    for (const f of await drive.listDayFiles()) {
-      const p = f.appProperties || {};
-      if (!p.day || p.kind === 'note' || !f.thumbnailLink) continue;
-      // В ссылке уже стоит запрошенный размер — подменяем на свой.
-      previewCache.set(p.day, /=s\d+/.test(f.thumbnailLink)
-        ? f.thumbnailLink.replace(/=s\d+.*$/, `=s${size}`)
-        : `${f.thumbnailLink}=s${size}`);
-    }
-  }
+  if (dates.some(d => !previewCache.has(d))) await fillThumbs(drive);
   const out = [];
   for (const date of dates) {
-    const url = previewCache.get(date);
-    if (!url) continue;
+    const link = previewCache.get(date);
+    if (!link) continue;
     const entry = await entries.get(date);
-    out.push({ date, url, eyes: entry ? entry.eyes : null });
+    out.push({ date, url: sizedThumb(link, size), eyes: entry ? entry.eyes : null });
   }
   return out;
+}
+
+/**
+ * Миниатюра одного дня — чтобы карточка дня показала лицо сразу, а не пустой
+ * квадрат на те секунды, пока едет оригинал.
+ */
+export async function thumbUrl(drive, date, { size = 540 } = {}) {
+  if (!previewCache.has(date)) {
+    if (!drive) return null;
+    await fillThumbs(drive);
+  }
+  const link = previewCache.get(date);
+  return link ? sizedThumb(link, size) : null;
 }
 
 /** Выбросить предпросмотр из памяти — как и всё остальное, он временный. */
@@ -415,6 +453,7 @@ export async function putPhoto(drive, date, file) {
     w, h,
   };
   await bench.delete(date);
+  previewCache.delete(date);         // ссылка вела на прежний снимок
   await blobs.put({ date, photo: blob, aligned: derived.aligned });
   await entries.put(entry);
   return entry;
@@ -483,4 +522,5 @@ export async function removeDay(drive, date) {
   await entries.delete(date);
   await blobs.delete(date);
   await bench.delete(date);
+  previewCache.delete(date);
 }

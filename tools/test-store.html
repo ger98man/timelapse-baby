@@ -58,12 +58,13 @@ function check(label, condition, detail = '') {
 // --- поддельная папка -------------------------------------------------------
 function fakeDrive() {
   const files = new Map();
+  let drive;
   const downloads = [];      // что и сколько раз качали — главное в этих тестах
   let seq = 0, sums = 0;
   let clock = Date.now() - 3600000;
   const tick = () => new Date(clock += 60000).toISOString();
 
-  return {
+  drive = {
     files,
     downloads,
     async findRoot(known) {
@@ -92,7 +93,9 @@ function fakeDrive() {
       f.modifiedTime = tick();
       return { id, modifiedTime: f.modifiedTime };
     },
+    listCalls: 0,
     async listDayFiles() {
+      drive.listCalls++;
       return [...files.values()].map(f => ({
         ...f,
         appProperties: { ...f.appProperties },
@@ -117,6 +120,7 @@ function fakeDrive() {
       return [...files.values()].find(f => f.appProperties.day === day && f.appProperties.kind === kind);
     },
   };
+  return drive;
 }
 
 async function jpeg(tint) {
@@ -164,6 +168,7 @@ async function jpeg(tint) {
   check('кэш знает про разметку', Boolean((await entries.get('2026-09-11')).eyes));
 
   caseOf('Обновление читает опись, а не качает снимки');
+  store.clearPreview();
   await clearCache();
   check('кэш пуст', (await entries.allDates()).length === 0);
   drive.downloads.length = 0;
@@ -173,16 +178,29 @@ async function jpeg(tint) {
   check('тел в базе нет', (await blobs.count()) === 0);
   const back = await entries.get('2026-09-11');
   check('разметка вернулась описью', back.eyes && Math.abs(back.eyes.lx - 0.41) < 1e-4);
+  const listedBefore = drive.listCalls;
 
-  caseOf('Предпросмотр идёт по миниатюрам Диска');
+  caseOf('Показ идёт по миниатюрам Диска');
   drive.downloads.length = 0;
-  store.clearPreview();
   const preview = await store.previewFrames(drive, ['2026-09-10', '2026-09-11']);
   check('кадры предпросмотра есть', preview.length === 2, `кадров=${preview.length}`);
   check('это ссылки, а не файлы', preview.every(p => typeof p.url === 'string'));
+  check('сторона запрошена своя', preview.every(p => p.url.endsWith('=s540')),
+    String(preview[0] && preview[0].url));
   check('разметка едет вместе с кадром',
     preview.some(p => p.date === '2026-09-11' && p.eyes));
   check('оригиналы ради предпросмотра не качались', drive.pulled('photo') === 0);
+  check('ссылки приехали описью, отдельного запроса не было',
+    drive.listCalls === listedBefore, `описей=${drive.listCalls - listedBefore}`);
+  const one = await store.thumbUrl(drive, '2026-09-11', { size: 320 });
+  check('карточке дня хватает той же ссылки', Boolean(one) && one.endsWith('=s320'),
+    String(one));
+  check('и она тоже не стоила запроса', drive.listCalls === listedBefore);
+  await store.putPhoto(drive, '2026-09-11', await jpeg('#6c9'));
+  check('после пересъёмки ссылка не переиспользуется',
+    (await store.thumbUrl(null, '2026-09-11')) === null);
+  await store.refresh(drive);
+  await blobs.clear();     // как будто приложение закрыли: память вкладки чиста
 
   caseOf('Сборка идёт через верстак и в памяти не копится');
   drive.downloads.length = 0;

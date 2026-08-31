@@ -14,6 +14,10 @@ import * as store from './store.js';
 import { pickFolder } from './picker.js';
 
 const $ = id => document.getElementById(id);
+
+// Сторона миниатюры, которую просим у Диска для показа. Столько же, сколько у
+// холста предпросмотра: одна ссылка обслуживает и карточку дня, и таймлапс.
+const THUMB_VIEW = 540;
 const state = {
   cfg: null,
   calYear: 0,
@@ -143,6 +147,8 @@ function paintPhoto(slotId, entry, body) {
     img.src = url(face);
     img.alt = '';
     slot.appendChild(img);
+  } else if (canPull()) {
+    showThumb(slot, entry);      // не ждём: приедет — дорисуется
   }
   const badge = document.createElement('div');
   badge.className = 'badge';
@@ -150,6 +156,43 @@ function paintPhoto(slotId, entry, body) {
     ? (canPull() ? 'загружаю снимок…' : 'снимок не загружен на этот телефон')
     : entry.eyes ? 'кадр выровнен' : 'глаза не отмечены';
   slot.appendChild(badge);
+}
+
+/**
+ * Пока оригинал едет из папки, показываем миниатюру, которую Google сделал
+ * сам: она стоит килобайты и приезжает мгновенно, а оригинал — мегабайт и
+ * секунды. Раньше на это время в карточке был пустой квадрат.
+ *
+ * Рисуем тем же расчётом, что и настоящий кадр, поэтому подмена на оригинал
+ * не дёргает картинку: глаза уже стоят на своих местах.
+ */
+async function showThumb(slot, entry) {
+  let link;
+  try {
+    link = await store.thumbUrl(drive(), entry.date, { size: THUMB_VIEW });
+  } catch {
+    return;                      // нет миниатюры — останется пустой квадрат
+  }
+  // Пока ходили за ссылкой, слот могли перерисовать или оригинал мог доехать.
+  if (!link || !slot.isConnected || slot.querySelector('img, canvas')) return;
+
+  const img = new Image();
+  try {
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error('миниатюра не открылась'));
+      img.src = link;
+    });
+  } catch {
+    return;
+  }
+  if (!slot.isConnected || slot.querySelector('img, canvas')) return;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = THUMB_VIEW;
+  drawAligned(canvas.getContext('2d'), img, img.naturalWidth, img.naturalHeight,
+    THUMB_VIEW, entry.eyes, state.cfg.eyeTarget);
+  slot.insertBefore(canvas, slot.firstChild);
 }
 
 /** Есть ли откуда качать: папка подключена и сеть на месте. */
@@ -992,8 +1035,13 @@ function setPlayButton(playing) {
  * не «проигрывать поток», а просто рисовать нужный кадр: отсюда и пауза, и
  * перемотка в любое место, чего у прежнего показа не было.
  */
+// Декодированный кадр 540×540 — это больше мегабайта сверх самой миниатюры.
+// Год таких в памяти не держат, поэтому вокруг текущего места оставляем окно,
+// а остальное отпускаем: пролистнули назад — декодируется заново, это дёшево.
+const PLAYER_WINDOW = 24;
+
 const player = {
-  frames: [],        // [{date, blob}] по порядку
+  frames: [],        // [{date, url, eyes}] по порядку
   images: new Map(),  // date -> HTMLImageElement, декодируем по требованию
   i: 0,
   playing: false,
@@ -1054,6 +1102,20 @@ async function drawFrame(i) {
   $('video-pos').textContent = D.formatLong(frame.date).replace(/ \d{4}$/, '');
   // Следующий кадр начинаем грузить заранее: иначе на первом показе темп плывёт.
   if (player.frames[i + 1]) imageFor(player.frames[i + 1]);
+  trimImages(i);
+}
+
+/** Отпускает кадры за пределами окна — иначе год показа съедает всю память. */
+function trimImages(i) {
+  if (player.images.size <= PLAYER_WINDOW * 2 + 2) return;
+  const keep = new Set();
+  for (let k = i - PLAYER_WINDOW; k <= i + PLAYER_WINDOW; k++) {
+    const frame = player.frames[k];
+    if (frame) keep.add(frame.date);
+  }
+  for (const date of [...player.images.keys()]) {
+    if (!keep.has(date)) player.images.delete(date);
+  }
 }
 
 function playerPlay() {
