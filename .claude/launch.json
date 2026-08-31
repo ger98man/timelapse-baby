@@ -4,8 +4,15 @@
     {
       "name": "web",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8787", "--bind", "127.0.0.1"],
-      "port": 8787
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8787",
+        "--bind",
+        "127.0.0.1"
+      ],
+      "port": 8787,
+      "autoPort": false
     }
   ]
 }
