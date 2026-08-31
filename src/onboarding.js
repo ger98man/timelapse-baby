@@ -101,8 +101,12 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     const next = () => show(at + 1);
 
+    // label = null — шага, на котором «Дальше» ничего не значит, кнопка не
+    // должна изображать. Серая кнопка обещает действие, которого нет.
     function setNext(label, enabled = true) {
       const b = $('wiz-next');
+      b.classList.toggle('hidden', !label);
+      if (!label) return;
       b.textContent = label;
       b.disabled = !enabled;
     }
@@ -134,7 +138,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           $('wiz-avatar').style.display = 'none';
         }
         $('wiz-signin-error').textContent = '';
-        setNext('Дальше', has);
+        // Вход сам перебрасывает на следующий шаг, так что вперёд отсюда
+        // ведёт только он. «Дальше» нужно единственному, кто сюда вернулся
+        // кнопкой «назад», уже войдя.
+        setNext(has ? 'Дальше' : null);
         setSkip(null);
       },
 
@@ -268,7 +275,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       err.textContent = '';
       $('wiz-signin').disabled = true;
       try {
-        const { accessToken } = await G.requestToken({ interactive: true });
+        const { accessToken } = await G.requestToken({ interactive: true, chooseAccount: true });
         const me = await G.fetchUserInfo(accessToken);
         if (!G.emailAllowed(me.email)) {
           G.forget();

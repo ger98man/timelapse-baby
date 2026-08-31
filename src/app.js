@@ -1084,7 +1084,7 @@ function bind() {
 
   $('btn-google-connect').onclick = async () => {
     try {
-      const { accessToken } = await G.requestToken({ interactive: true });
+      const { accessToken } = await G.requestToken({ interactive: true, chooseAccount: true });
       const me = await G.fetchUserInfo(accessToken);
       if (!G.emailAllowed(me.email)) { G.forget(); toast('Этот аккаунт в список не входит'); return; }
       await settings.set('driveEmail', me.email);

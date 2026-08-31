@@ -69,11 +69,6 @@ async function client() {
   return tokenClient;
 }
 
-/**
- * Просит токен. interactive:false — тихая попытка: сработает, если Google-сессия
- * жива и браузер не режет сторонние куки. В Safari тихая попытка часто падает,
- * и тогда нужен один тап пользователя. Это ожидаемо, а не поломка.
- */
 /** Google отвечает кодами; человеку нужно знать, что именно чинить. */
 export function explain(code, description) {
   const map = {
@@ -92,7 +87,18 @@ export function explain(code, description) {
   return map[code] || description || 'Google отказал в доступе';
 }
 
-export function requestToken({ interactive = true } = {}) {
+/**
+ * Просит токен. interactive:false — тихая попытка: сработает, если Google-сессия
+ * жива и браузер не режет сторонние куки. В Safari тихая попытка часто падает,
+ * и тогда нужен один тап пользователя. Это ожидаемо, а не поломка.
+ *
+ * chooseAccount — показать выбор аккаунта. Нужно там, где человек сам нажал
+ * «войти»: у него может быть рабочая почта, личная и почта второго родителя,
+ * и решать за него, какая из них «текущая», нельзя. В остальных случаях
+ * (час прошёл, токен протух) выбор не нужен — молча продлеваем тот же вход,
+ * иначе приложение будет спрашивать одно и то же каждый час.
+ */
+export function requestToken({ interactive = true, chooseAccount = false } = {}) {
   return new Promise(async (resolve, reject) => {
     const tc = await client();
     tc.callback = resp => {
@@ -106,7 +112,8 @@ export function requestToken({ interactive = true } = {}) {
     };
     tc.error_callback = err => reject(new Error(explain(err && err.type, err && err.message)));
     try {
-      tc.requestAccessToken({ prompt: interactive ? '' : 'none' });
+      const prompt = !interactive ? 'none' : chooseAccount ? 'select_account' : '';
+      tc.requestAccessToken({ prompt });
     } catch (e) {
       reject(e);
     }
