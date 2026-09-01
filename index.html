@@ -100,9 +100,11 @@
       <!-- 2. Вход -->
       <section class="step hidden" data-step="signin">
         <h1 class="cover-title">Вход</h1>
-        <p class="cover-sub">Google спросит разрешение один раз. Приложение
-          попросит доступ только к папке, которую само создаст, — остальной Диск
-          ему не виден.</p>
+        <p class="cover-sub">Google спросит разрешение один раз — и попросит
+          доступ к Диску целиком. Иначе второй родитель не увидит в общей папке
+          ни одного снимка первого: более узкий доступ Google выдаёт каждому
+          человеку отдельно. Приложение пользуется им только внутри папки
+          альбома.</p>
         <div id="wiz-account" class="account hidden">
           <img id="wiz-avatar" alt="" class="avatar">
           <div>
@@ -124,9 +126,10 @@
         </button>
         <button id="wiz-signout" class="btn btn-quiet full hidden">Войти другим аккаунтом</button>
         <p id="wiz-signin-error" class="error"></p>
-        <p class="hint">Если Google покажет «приложение не проверено» — это
-          нормально: проверку проходят только приложения, которые просят доступ
-          ко всему Диску. Нажмите «Дополнительно» и продолжите.</p>
+        <p class="hint">Если Google покажет «приложение не проверено» — так и
+          есть: проверку проходят приложения, выложенные для всех, а это
+          семейное, на несколько человек. Нажмите «Дополнительно» и
+          продолжите.</p>
       </section>
 
       <!-- 3. Папка -->
@@ -385,11 +388,32 @@
 
       <div class="card" id="google-card">
         <h2>Google Диск</h2>
+        <!-- Первым делом — в какую папку всё уходит. Это единственное, что
+             у второго родителя может оказаться не тем, и увидеть это надо
+             сразу, а не через «Открыть Google Диск». Действия — тут же под
+             именем: все три про эту самую папку. -->
+        <div id="google-folder" class="folder-box hidden">
+          <div class="folder-card">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 7.5a1 1 0 011-1h5l2 2h9a1 1 0 011 1V18a1 1 0 01-1 1H4a1 1 0 01-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            <span id="google-folder-name"></span>
+          </div>
+          <div class="folder-actions">
+            <button id="btn-sync" class="tile">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 11-2.4-5.7"/><path d="M20 4.5V9h-4.5"/></svg>
+              Обновить
+            </button>
+            <a id="drive-link" class="tile" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M18 14.5V19a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h4.5"/></svg>
+              Открыть
+            </a>
+            <button id="btn-pick-folder" class="tile">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13l-3.5-3.5"/><path d="M20 15H7l3.5 3.5"/></svg>
+              <span id="btn-pick-label">Поменять</span>
+            </button>
+          </div>
+        </div>
         <p id="google-status" class="hint"></p>
         <button id="btn-google-connect" class="btn full hidden">Подключить Google</button>
-        <button id="btn-sync" class="btn full hidden">Синхронизировать</button>
-        <a id="drive-link" class="btn full hidden" target="_blank" rel="noopener">Открыть Google Диск</a>
-        <button id="btn-pick-folder" class="btn full hidden">Выбрать папку в Google Диск</button>
         <button id="btn-google-off" class="btn full hidden">Выйти из учётной записи Google</button>
         <p class="hint" id="google-hint">Второму родителю: пусть первый откроет папку в Диске
           и даст доступ на редактирование. Дальше приложение само спросит при
@@ -446,7 +470,8 @@
         <h2>Приватность</h2>
         <p class="hint">Своего сервера у приложения нет: ни аналитики, ни
           облачного распознавания лиц. Фотографии лежат в вашем Google Диске,
-          и доступ к ним даёт только ваш аккаунт. От чужих рук телефон защищает
+          и доступ к ним даёт только ваш аккаунт. Разрешение Google выдаёт ко
+          всему Диску, но приложение ходит только в папку альбома. От чужих рук телефон защищает
           Face ID, а не приложение, — своего замка мы намеренно не заводим,
           чтобы он не создавал ложного чувства защищённости.</p>
         <p class="hint"><a class="link" href="privacy.html" target="_blank" rel="noopener">Политика

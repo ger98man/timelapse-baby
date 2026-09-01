@@ -11,6 +11,7 @@ import { GOOGLE, configured, pickerReady } from '../config.js';
 import * as G from './google.js';
 import { createDrive, rootName } from './drive.js';
 import { pickFolder } from './picker.js';
+import { forgetAlbum } from './store.js';
 import { fetchProfile, pushProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
 import * as D from './dates.js';
 
@@ -54,12 +55,13 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       folderName: cfg.driveFolderName || GOOGLE.folderName,
       remoteDays: 0,
       remoteProfile: false,
+      reauth: false,
     };
 
     // В мастере токен просим интерактивно: человек прямо сейчас у экрана и
     // готов подтвердить, а молча упереться в «нужно переподключить» — тупик.
     const drive = createDrive({
-      getToken: () => G.getAccessToken({ interactive: true }),
+      getToken: opts => G.getAccessToken({ interactive: true, ...opts }),
     });
 
     // Набор шагов подстраивается на ходу: «Про кого снимаем» отпадает, если
@@ -287,6 +289,8 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
         // на ней уже стоит, от владельца.
         await drive.adoptRoot(folder.id);
+        // Дни прежней папки к этой не относятся — кэш пересоберётся из неё.
+        await forgetAlbum();
         await useFolder({ id: folder.id, name: folder.name, ownedByMe: false });
         onToast(`Папка «${folder.name}» подключена`);
       } catch (e) {
@@ -324,6 +328,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       async folder() {
         const err = $('wiz-folder-error');
         err.textContent = '';
+        state.reauth = false;
         setNext(null);
         $('wiz-folder-ok').classList.add('hidden');
         $('wiz-folder-choice').classList.add('hidden');
@@ -339,7 +344,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           // Единственное честное действие — повторить попытку.
           $('wiz-folder-text').textContent = 'Не удалось заглянуть в Диск.';
           err.textContent = e.message || 'Google Диск не ответил';
-          setNext('Попробовать снова', true);
+          // Вход не приняли — «попробовать снова» упрётся в то же самое.
+          // Окно Google открывается только по нажатию, поэтому возвращаем
+          // человека на шаг входа: там кнопка, а значит и разрешённый тап.
+          state.reauth = e && e.code === 'auth';
+          setNext(state.reauth ? 'Войти заново' : 'Попробовать снова', true);
         }
       },
 
@@ -409,6 +418,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       const step = steps[at];
       if (leave[step] && !(await leave[step]())) return;
       if (step === 'done') return finish();
+      if (step === 'folder' && state.reauth) {
+        state.reauth = false;
+        state.signedIn = false;
+        return show(steps.indexOf('signin'));
+      }
       if (step === 'folder' && !state.folderId) return enter.folder();
       next();
     };

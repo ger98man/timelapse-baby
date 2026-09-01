@@ -15,7 +15,7 @@
 // поштучно: когда открыли день, когда собирают таймлапс. Календарю хватает
 // миниатюр, которые Google уже сделал сам, — килобайты вместо мегабайт.
 
-import { entries, blobs, bench, settings } from './db.js';
+import { entries, blobs, bench, settings, clearCache } from './db.js';
 import { toMaster } from './img.js';
 import { renderSquareBlob } from './align.js';
 import { TAG, describeFile } from './drive.js';
@@ -91,12 +91,30 @@ export async function ensureFolder(drive) {
 }
 
 /**
+ * Кэш собран не из этой папки? Спрашиваем у Диска про один кэшированный день:
+ * лежит он в этой папке или нет. Нужно там, где приложение ещё не помнит,
+ * из какой папки кэш, — у всех, кто обновился с прежней версии.
+ *
+ * Не ответил или файла нет — «не знаю»: в этом случае решает осторожность,
+ * и кэш остаётся на месте.
+ */
+async function fromElsewhere(drive, rootId, dates) {
+  const first = await entries.get(dates[0]);
+  if (!first || !first.fileId || typeof drive.belongsToAlbum !== 'function') return false;
+  try {
+    return !(await drive.belongsToAlbum(rootId, first.fileId));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Подтягивает опись папки в кэш. Единственное направление: Диск → телефон.
  * Обратного нет, потому что правки уходят в папку сразу, а не копятся.
  *
- * Снимки здесь не качаются. Обновление стоит одного запроса независимо от
- * того, сколько лет уже снято, и потому его не страшно делать при каждом
- * запуске и на мобильном интернете.
+ * Снимки здесь не качаются, и мегабайтов не будет, сколько бы лет ни было
+ * снято: спрашиваются папки альбома и опись файлов в них. Поэтому обновление
+ * не страшно делать при каждом запуске и на мобильном интернете.
  */
 export async function refresh(drive, { onProgress = () => {} } = {}) {
   onProgress(0, 1, 'Ищу папку');
@@ -109,9 +127,38 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
   const cfg = await settings.all();      // настройки могли приехать из папки
   const remote = indexRemote(files);
 
-  // Чего в папке нет — того нет и у нас. Кэш не хранит ничего своего.
+  // Кэш помнит, из какой папки он собран. Сменили папку — дни прежнего
+  // альбома к новой не относятся вовсе, и держать их рядом с её днями нельзя:
+  // получится альбом, которого нет ни у кого.
+  const switched = Boolean(cfg.cacheFolderId) && cfg.cacheFolderId !== rootId;
+  const local = await entries.allDates();
+  const foreign = switched ||
+    (Boolean(local.length) && !remote.size && await fromElsewhere(drive, rootId, local));
+
+  // А вот пустая папка при непустом кэше — если папка та же самая — почти
+  // всегда не «всё удалили», а «перестали видеть»: отозвали доступ, оборвалась
+  // сеть. Стереть в этот момент всё накопленное — потеря, которую нечем
+  // откатить, поэтому не стираем, а говорим.
+  if (!foreign && !remote.size && local.length) {
+    const e = new Error(
+      `В папке не видно ни одного дня, а на телефоне их ${local.length}. ` +
+      'Ничего не удаляю: похоже, приложение потеряло доступ к файлам. ' +
+      'Проверьте папку в «Настройках».');
+    e.code = 'empty-folder';
+    throw e;
+  }
+
+  // Кэш от прежней папки выбрасываем целиком, а не по дням: совпади дата —
+  // от старого дня остался бы комментарий поверх чужого снимка.
   let dropped = 0;
-  for (const day of await entries.allDates()) {
+  if (foreign) {
+    await clearCache();
+    previewCache.clear();
+    dropped = local.length;
+  }
+
+  // Чего в папке нет — того нет и у нас. Кэш не хранит ничего своего.
+  for (const day of (foreign ? [] : local)) {
     if (!remote.has(day)) {
       await entries.delete(day);
       await blobs.delete(day);
@@ -200,7 +247,7 @@ export async function refresh(drive, { onProgress = () => {} } = {}) {
     await entries.put(entry);
   }
 
-  await settings.set('lastSyncAt', Date.now());
+  await settings.merge({ lastSyncAt: Date.now(), cacheFolderId: rootId });
   return { added, changed, dropped, days: days.length, rootId };
 }
 
@@ -277,6 +324,18 @@ export async function thumbUrl(drive, date, { size = 540 } = {}) {
   }
   const link = previewCache.get(date);
   return link ? sizedThumb(link, size) : null;
+}
+
+/**
+ * Забыть альбом прежней папки — целиком, вместе с телами снимков и запомненным
+ * config.json. Зовётся там, где человек сам выбрал папку: это единственный
+ * момент, когда точно известно, что прежние дни к новому альбому отношения не
+ * имеют. Терять нечего — правда лежит в папке, опись приедет заново.
+ */
+export async function forgetAlbum() {
+  await clearCache();
+  previewCache.clear();
+  await settings.merge({ cacheFolderId: null, profileFileId: null });
 }
 
 /** Выбросить предпросмотр из памяти — как и всё остальное, он временный. */

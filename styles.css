@@ -159,7 +159,31 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; padding: 13px 14px; color: var(--accent);
 }
-.folder-card span { color: var(--text); font-weight: 550; font-size: 15px; }
+.folder-card svg { flex: none; }
+/* Имя папки подписано почтой владельца и переносить его негде — пусть рвётся
+   где придётся, иначе оно вылезает за карточку. */
+.folder-card span { color: var(--text); font-weight: 550; font-size: 15px; overflow-wrap: anywhere; }
+
+/* Папка в «Настройках»: сверху — куда всё уходит, снизу — что с этим можно
+   сделать. Три действия про одну и ту же папку стояли тремя полосами во всю
+   ширину и читались как три разных раздела; рядом они читаются как одно. */
+.folder-box {
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); margin: 6px 0 12px;
+}
+.folder-box .folder-card { border: none; background: none; margin: 0; }
+.folder-actions { display: flex; gap: 6px; padding: 0 8px 8px; }
+.tile {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 11px 4px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text); font: inherit; font-weight: 550; font-size: 13px;
+  text-align: center; text-decoration: none; cursor: pointer;
+}
+.tile svg { color: var(--accent); }
+.tile:active { transform: scale(.985); background: var(--line); }
+.tile:disabled { opacity: .45; }
 
 .steps { padding-left: 20px; margin: 10px 0 0; }
 .steps li { margin-bottom: 5px; }

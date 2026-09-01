@@ -258,6 +258,7 @@ const DEFAULT_SETTINGS = {
   // Google Диск
   onboardingDone: false,
   driveFolderId: null,     // id папки приложения
+  cacheFolderId: null,     // из какой папки собран кэш — см. store.refresh
   profileFileId: null,     // id config.json в этой папке
   driveFolderName: 'TimelapseBaby',
   driveEmail: null,        // чей аккаунт подключён

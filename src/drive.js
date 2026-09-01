@@ -1,8 +1,8 @@
 // Тонкая обёртка над Google Drive REST v3 — ровно те вызовы, что нужны.
 //
-// Приложение просит скоуп drive.file: оно видит только то, что само создало,
-// и то, что человек явно выбрал через окно Google. Остальной Диск для него
-// не существует — так и должно быть.
+// Доступ к Диску у приложения полный (почему — см. google.js), но ходит оно
+// только в папку альбома: и опись, и размер альбома считаются по её же
+// папкам. Ничего вне альбома приложение не читает и не трогает.
 //
 // getToken передаётся снаружи, а fetch можно подменить: на этом держатся тесты.
 
@@ -41,8 +41,9 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   async function call(url, { method = 'GET', body, headers = {}, raw = false } = {}) {
     let lastError;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const token = await getToken();
+    let stale = null;                 // токен, который Google только что отверг
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const token = await getToken(stale ? { stale } : undefined);
       const res = await fetchImpl(url, {
         method,
         body,
@@ -54,6 +55,15 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
       if (res.status === 429 || res.status >= 500) {
         lastError = new Error(`Google ответил ${res.status}`);
         await sleep(400 * Math.pow(2, attempt));
+        continue;
+      }
+
+      // 401 — сохранённый токен мёртв. Такое бывает и до истечения часа:
+      // доступ отозвали в настройках Google, сменили пароль, пересобрали
+      // ключи проекта. Выбрасываем его и повторяем с новым — ровно один раз,
+      // иначе разговор с Google превратится в бесконечный круг.
+      if (res.status === 401 && !stale) {
+        stale = token;
         continue;
       }
       let detail = '';
@@ -69,6 +79,14 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
           'Если папку так и не пускает — попросите первого родителя дать ' +
           'вам права редактора.');
       }
+      // И новый токен не приняли — значит дело не в токене, а во входе.
+      // Английское «invalid authentication credentials» человеку не говорит
+      // ничего, а починка ровно одна: войти в Google заново.
+      if (res.status === 401) {
+        const e = new Error('Google не принял вход — похоже, он устарел. Войдите заново.');
+        e.code = 'auth';
+        throw e;
+      }
       throw new Error(`Google Диск: ${res.status}${detail ? ' — ' + detail : ''}`);
     }
     throw lastError;
@@ -77,6 +95,8 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   function q(parts) {
     return parts.filter(Boolean).join(' and ');
   }
+
+  const inAny = ids => '(' + ids.map(id => `'${id}' in parents`).join(' or ') + ')';
 
   async function list(query, fields = 'files(id,name,mimeType,modifiedTime,md5Checksum,appProperties,parents,thumbnailLink),nextPageToken') {
     const out = [];
@@ -204,19 +224,18 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return call(url, { method: fileId ? 'PATCH' : 'POST', body, headers: { 'Content-Type': type } });
   }
 
-  /** Все файлы приложения одним запросом — папки обходить не нужно. */
   /**
    * Сколько места занимает альбом и сколько осталось в самом Диске.
    *
-   * Размер считаем по своим же файлам: скоуп drive.file чужого не показывает,
-   * да и мерить надо именно альбом, а не весь Диск. Файлы в общей папке
-   * лежат на квоте того, кто их залил, — поэтому «свободно» тут про аккаунт,
-   * которым вошли, а не про папку.
+   * Считаем по файлам альбома — мерить надо именно его, а не весь Диск.
+   * Файлы в общей папке лежат на квоте того, кто их залил, — поэтому
+   * «свободно» тут про аккаунт, которым вошли, а не про папку.
    * @returns {Promise<{albumBytes:number, files:number, used:number, limit:number}>}
    */
-  async function usage() {
+  async function usage(rootId) {
     const files = await list(q([
       `appProperties has { key='${TAG}' and value='1' }`,
+      rootId && inAny(await albumFolders(rootId)),
       'trashed=false',
     ]), 'files(id,size),nextPageToken');
     const albumBytes = files.reduce((n, f) => n + Number(f.size || 0), 0);
@@ -231,19 +250,55 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     };
   }
 
+  /** Папки альбома: сам корень и все `ГГГГ/ММ` под ним. */
+  async function albumFolders(rootId) {
+    const kids = async parents => (parents.length
+      ? (await list(q([inAny(parents), `mimeType='${FOLDER_MIME}'`, 'trashed=false']),
+          'files(id),nextPageToken')).map(f => f.id)
+      : []);
+    const years = await kids([rootId]);
+    return [rootId, ...years, ...await kids(years)];
+  }
+
   /**
-   * Опись альбома. Обычный путь — один запрос по метке приложения; для общей
-   * папки, где метки не видно, — обход по родителям. Пусто по метке при
-   * известной папке всегда стоит перепроверить обходом: своя пустая папка
-   * ответит одним дешёвым запросом, а чужая полная — покажет своё содержимое.
+   * Опись альбома. Обычный путь — запрос по метке приложения, но обязательно
+   * внутри папок альбома: метку ставит наш же код, и у второго родителя
+   * рядом с общей папкой обычно лежит собственный, заведённый по ошибке
+   * альбом с такой же меткой на файлах. Поиск по одной метке приносил их
+   * вперемешку — приложение показывало свои старые дни вместо общих и читало
+   * настройки из чужого config.json, при том что новые снимки уходили уже
+   * в общую папку.
+   *
+   * Пусто по метке при известной папке всегда стоит перепроверить обходом:
+   * своя пустая папка ответит дёшево, а полная общая — покажет содержимое
+   * даже там, где метки не видно.
    */
   async function listDayFiles(rootId) {
+    if (!rootId) {
+      return list(q([
+        `appProperties has { key='${TAG}' and value='1' }`,
+        'trashed=false',
+      ]));
+    }
     const tagged = await list(q([
       `appProperties has { key='${TAG}' and value='1' }`,
+      inAny(await albumFolders(rootId)),
       'trashed=false',
     ]));
-    if (tagged.length || !rootId) return tagged;
-    return listTree(rootId);
+    return tagged.length ? tagged : listTree(rootId);
+  }
+
+  /**
+   * Лежит ли файл в этой папке альбома. Спрашивают об этом в одном месте:
+   * когда в папке не видно ни одного дня, а в кэше дни есть, — и надо решить,
+   * то ли это дни отсюда и доступ к ним пропал, то ли кэш вообще от прежней
+   * папки. Разница в цене ошибки: в первом случае стирать нельзя, во втором —
+   * нужно, иначе человек смотрит на чужой альбом.
+   */
+  async function belongsToAlbum(rootId, fileId) {
+    const f = await call(`${API}/files/${fileId}?fields=parents`);
+    const ids = new Set(await albumFolders(rootId));
+    return (f.parents || []).some(p => ids.has(p));
   }
 
   /**
@@ -326,7 +381,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
    * уровня, поэтому и запросов три — год и месяц спрашиваются пачкой.
    */
   async function listTree(rootId) {
-    const inAny = ids => '(' + ids.map(id => `'${id}' in parents`).join(' or ') + ')';
     const dive = async parents => (parents.length
       ? list(q([inAny(parents), 'trashed=false']))
       : []);
@@ -353,6 +407,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
 
   return {
     findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
-    listDayFiles, listChildren, listTree, download, trash, untrash, folderLink, usage,
+    listDayFiles, listChildren, listTree, belongsToAlbum, download, trash, untrash,
+    folderLink, usage,
   };
 }

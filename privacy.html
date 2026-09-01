@@ -48,7 +48,7 @@
 <body>
 
 <h1>Политика конфиденциальности</h1>
-<p class="updated">Приложение «TimelapseBaby» · обновлено 31 августа 2026</p>
+<p class="updated">Приложение «TimelapseBaby» · обновлено 1 сентября 2026</p>
 
 <p class="lede">Короткая версия: у приложения нет сервера. Ваши фотографии
 лежат только в папке вашего Google Диска — на телефоне они не сохраняются
@@ -67,12 +67,16 @@
 <h2>Какие данные Google использует приложение</h2>
 
 <div class="card">
-  <h3 style="margin-top:0">Доступ к файлам на Диске — <code>drive.file</code></h3>
-  <p>Этот доступ позволяет приложению работать <strong>только с теми файлами и
-  папками, которые оно создало само</strong>, а также с папкой, которую вы явно
-  выбрали в окне выбора Google. Остальной ваш Диск приложению не виден.</p>
-  <p>Используется, чтобы складывать снимки и комментарии в папку и читать их
-  обратно на другом устройстве.</p>
+  <h3 style="margin-top:0">Доступ к файлам на Диске — <code>drive</code></h3>
+  <p>Google выдаёт этот доступ ко всему Диску. Приложение пользуется им
+  <strong>только внутри папки альбома</strong>: складывает туда снимки и
+  комментарии и читает их обратно на другом устройстве. Ничего за пределами
+  этой папки оно не читает, не меняет и никуда не отправляет — весь код
+  открыт и выполняется у вас в браузере.</p>
+  <p>Более узкий доступ «только к своим файлам» (<code>drive.file</code>) не
+  подошёл: он выдаётся отдельно каждому человеку, и второй родитель, открыв
+  общую папку, видел бы в ней пустоту вместо снимков первого. Общий альбом на
+  двоих с ним невозможен.</p>
 </div>
 
 <div class="card">
@@ -87,13 +91,16 @@
   <li><strong>На вашем устройстве.</strong> Опись альбома (даты, комментарии,
     разметка глаз), настройки и токен доступа Google лежат в хранилище
     браузера (IndexedDB и localStorage). Сами фотографии там не хранятся:
-    снимок загружается из папки, когда его показывают или собирают в видео,
-    живёт в памяти вкладки и исчезает вместе с ней. На устройстве файл
-    остаётся только если вы сами скачали архив или видео.</li>
-  <li><strong>В вашем Google Диске.</strong> В папке, которую приложение создаёт
-    при первом входе, — обычные файлы JPEG, текстовые комментарии и файл
-    настроек <code>config.json</code>. Папка принадлежит вам; вы решаете, кому
-    дать к ней доступ.</li>
+    снимок загружается из папки, когда его показывают, живёт в памяти вкладки
+    и исчезает вместе с ней. Исключение одно — сборка видео: кадры для неё
+    складываются на время в хранилище браузера, иначе год кадров вкладка не
+    удержит, и стираются, как только вы уходите с экрана видео. На устройстве
+    файл остаётся только если вы сами скачали архив или видео.</li>
+  <li><strong>В вашем Google Диске.</strong> В папке альбома — обычные файлы
+    JPEG, текстовые комментарии и файл настроек <code>config.json</code>. Папку
+    приложение заводит не само, а по вашему решению при настройке; второй
+    родитель вместо этого подключается к общей папке первого. Папка
+    принадлежит своему владельцу, и он решает, кому дать к ней доступ.</li>
 </ul>
 
 <h2>Чего приложение не делает</h2>
@@ -151,14 +158,14 @@ issues в репозитории проекта</a>. Исходный код о�
 
 <div class="en" lang="en">
 <h1>Privacy Policy</h1>
-<p class="updated">“Every Day” photo app · updated 31 August 2026</p>
+<p class="updated">“TimelapseBaby” photo app · updated 1 September 2026</p>
 
 <p class="lede">Short version: this app has no server. Your photos stay on your
 own device and in a folder in your own Google Drive. The author of the app has
 no access to them and cannot gain any.</p>
 
 <h2>What the app does</h2>
-<p>“Every Day” is a web app for taking one photo of your child per day, keeping
+<p>“TimelapseBaby” is a web app for taking one photo of your child per day, keeping
 a calendar with notes, and assembling the collected frames into a timelapse
 video.</p>
 
@@ -169,11 +176,13 @@ Drive, with your explicit permission.</p>
 
 <h2>Google user data the app uses</h2>
 <ul>
-  <li><code>https://www.googleapis.com/auth/drive.file</code> — per-file access
-    limited to files and folders the app itself created, plus a folder you
-    explicitly picked through the Google Picker. The rest of your Drive is not
-    visible to the app. Used to store daily photos and notes and to read them
-    back on another device.</li>
+  <li><code>https://www.googleapis.com/auth/drive</code> — Google grants this
+    for the whole Drive; the app uses it only inside the album folder, to store
+    daily photos and notes and read them back on another device. Nothing
+    outside that folder is read, changed or sent anywhere. The narrower
+    <code>drive.file</code> scope is granted per person, so a second parent
+    would see an empty folder instead of the first parent's photos — a shared
+    album is impossible with it.</li>
   <li><code>openid</code>, <code>email</code>, <code>profile</code> — used to
     show which account is signed in and to check it against an allow-list if the
     owner configured one. The email address is stored only on your device.</li>
@@ -183,14 +192,17 @@ Drive, with your explicit permission.</p>
 <ul>
   <li><strong>On your device</strong> — the album index (dates, notes, eye
     marks), settings and the Google access token live in browser storage
-    (IndexedDB and localStorage). Photos are not stored on the device: each
-    one is fetched from the folder when shown or rendered into a video, kept
-    in the tab's memory and dropped with it. A file stays on the device only
-    if you download an archive or a video yourself.</li>
+    (IndexedDB and localStorage). Photos are not stored on the device: each one
+    is fetched from the folder when shown, kept in the tab's memory and dropped
+    with it. The one exception is rendering a video: its frames are held in
+    browser storage while you are on the video screen — a year of them does not
+    fit in a tab — and erased as soon as you leave it. A file stays on the
+    device only if you download an archive or a video yourself.</li>
   <li><strong>In your Google Drive</strong> — plain JPEG files, plain-text notes
-    and a <code>config.json</code> settings file, inside a folder the app
-    creates on first sign-in. The folder is yours; you decide who may access
-    it.</li>
+    and a <code>config.json</code> settings file, inside the album folder. The
+    app does not create that folder on its own: you ask for it during setup, or
+    connect to the other parent's shared folder instead. The folder belongs to
+    its owner, who decides who may access it.</li>
 </ul>
 
 <h2>What the app does not do</h2>

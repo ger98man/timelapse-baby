@@ -286,7 +286,7 @@ async function pullBody(key, { silent = true } = {}) {
 
 /** Диск создаётся лениво: без интернета и без токена он и не нужен. */
 function drive() {
-  return createDrive({ getToken: () => G.getAccessToken({ interactive: false }) });
+  return createDrive({ getToken: opts => G.getAccessToken({ interactive: false, ...opts }) });
 }
 
 /** Обновление из папки — с прогрессом и внятным итогом. */
@@ -537,6 +537,9 @@ async function askWhoYouAre() {
         if (!folder) { err.textContent = PICKER_HINT; return; }
         if (yearFolder(folder.name)) { err.textContent = YEAR_FOLDER; return; }
         await drive().adoptRoot(folder.id);
+        // Дни прежней папки к этой не относятся: человек только что сказал,
+        // какой альбом его, — остальное кэш, и он пересоберётся из папки.
+        await store.forgetAlbum();
         await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
         toast(`Папка «${folder.name}» подключена`);
         resolve(true);
@@ -696,8 +699,9 @@ async function renderGoogleCard() {
     status.textContent = 'В этой сборке не заполнен clientId в config.js, ' +
       'поэтому Диск недоступен: приложение работает локально, а архив ' +
       'выгружается вручную. Это чинится на стороне того, кто выкладывал сборку.';
+    status.classList.remove('hidden');
     ['btn-sync', 'drive-link', 'btn-pick-folder', 'btn-google-off', 'google-hint',
-      'btn-google-connect'].forEach(id => show(id, false));
+      'btn-google-connect', 'google-folder'].forEach(id => show(id, false));
     return;
   }
   show('google-hint', true);
@@ -709,29 +713,36 @@ async function renderGoogleCard() {
   // Всё, что раньше делала кнопка «Пройти настройку заново», приложение делает
   // само при входе: ищет папку, а если её нет — спрашивает, кто пришёл.
   show('btn-google-connect', !connected);
-  show('btn-sync', connected);
-  show('btn-pick-folder', connected);
   show('btn-google-off', connected);
 
-  const link = $('drive-link');
-  if (connected && cfg.driveFolderId) {
-    link.href = `https://drive.google.com/drive/folders/${cfg.driveFolderId}`;
-    link.classList.remove('hidden');
-  } else {
-    link.classList.add('hidden');
+  // Какая папка подключена — как в мастере. У второго родителя рядом с общей
+  // папкой лежит своя, названия отличаются только почтой в конце, и без этой
+  // строчки перепутать их можно, ничего не заметив.
+  const hasFolder = connected && Boolean(cfg.driveFolderId);
+  show('google-folder', connected);
+  $('google-folder-name').textContent = hasFolder
+    ? cfg.driveFolderName
+    : 'Папка не выбрана';
+
+  // Обновлять и открывать нечего, пока папки нет; выбрать — единственное,
+  // что в этот момент имеет смысл, поэтому кнопка так и называется.
+  show('btn-sync', hasFolder);
+  show('drive-link', hasFolder);
+  $('btn-pick-label').textContent = hasFolder ? 'Поменять' : 'Выбрать';
+  if (hasFolder) {
+    $('drive-link').href = `https://drive.google.com/drive/folders/${cfg.driveFolderId}`;
   }
 
+  // Почта и время синхронизации ушли: почта и так в полоске наверху, а «когда
+  // синхронизировано» приложение решает само и спрашивать об этом нечего.
+  // Строчка остаётся для того, что человеку и правда нужно знать.
   if (!connected) {
+    status.classList.remove('hidden');
     status.textContent = 'Аккаунт не подключён.';
     return;
   }
-  const when = cfg.lastSyncAt
-    ? (Date.now() - cfg.lastSyncAt < 3600000
-        ? 'синхронизировано только что'
-        : `последняя синхронизация ${D.formatLong(D.toKey(new Date(cfg.lastSyncAt)))}`)
-    : 'ещё ни разу не синхронизировано';
-  status.textContent = `${cfg.driveEmail} · ${when}` +
-    (token ? '' : ' · нужен один тап, чтобы обновить доступ');
+  status.textContent = token ? '' : 'Нужен один тап, чтобы обновить доступ.';
+  status.classList.toggle('hidden', Boolean(token));
 }
 
 // --- экран «Сегодня» --------------------------------------------------------
@@ -1667,7 +1678,7 @@ async function renderStorageCard(total) {
   }
   el.textContent = 'Считаю…';
   try {
-    const u = await drive().usage();
+    const u = await drive().usage(state.cfg.driveFolderId);
     const days = total
       ? ` за ${total} ${D.plural(total, 'день', 'дня', 'дней')}`
       : '';
@@ -1977,8 +1988,10 @@ function bind() {
       if (!folder) return toast(PICKER_HINT);
       if (yearFolder(folder.name)) return toast(YEAR_FOLDER);
       await drive().adoptRoot(folder.id);
+      await store.forgetAlbum();
       await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
       state.cfg = await settings.all();
+      await renderGoogleCard();
       toast(`Папка «${folder.name}» подключена`);
       await runSync();
     } catch (e) {
