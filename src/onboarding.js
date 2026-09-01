@@ -157,6 +157,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       // наткнуться на старую свою папку, а человек пришёл в общую — или
       // наоборот, подключился к чужой, а хочет собственный альбом.
       $('wiz-folder-other').classList.toggle('hidden', !pickerReady());
+      // Своя папка уже есть — заводить вторую такую же незачем: это тот самый
+      // второй пустой альбом рядом с первым. Кнопка остаётся только в чужой
+      // папке, где она и значит «хочу собственный альбом».
+      $('wiz-folder-new').classList.toggle('hidden', Boolean(root.ownedByMe));
       resetNewFolder();
       setNext('Дальше', true);
 
