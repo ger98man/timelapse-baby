@@ -1856,6 +1856,25 @@ function overlay(id, show) {
   return transition(() => el.classList.toggle('hidden', !show));
 }
 
+/**
+ * Закрыть открытый лист, уходя со вкладки. Меню под листом видно и нажимается,
+ * поэтому уйти с него могут в любой момент, — а лист, оставшийся поверх нового
+ * экрана, был бы тупиком. Прячем его прямо в переходе экрана: отдельный
+ * переход оборвал бы этот же и лист исчез бы рывком.
+ */
+function dropSheets() {
+  if (!$('overlay-day').classList.contains('hidden')) {
+    clearTimeout(dayCommentTimer);
+    if (dayKey) saveComment(dayKey, $('day-comment').value);
+    dayKey = null;
+    $('overlay-day').classList.add('hidden');
+  }
+  if (!$('overlay-align').classList.contains('hidden')) {
+    $('overlay-align').classList.add('hidden');
+    state.align = null;
+  }
+}
+
 async function showScreen(name) {
   // Верстак живёт ровно столько, сколько человек стоит на экране видео.
   // Ушёл — от собранного года на телефоне не остаётся ничего.
@@ -1865,6 +1884,7 @@ async function showScreen(name) {
   }
   state.screen = name;
   await transition(() => {
+    dropSheets();
     freeUrls();
     for (const s of document.querySelectorAll('.screen')) s.classList.add('hidden');
     $('screen-' + name).classList.remove('hidden');

@@ -541,16 +541,27 @@ body.has-conn { --conn-h: 37px; }
 @keyframes sheet-out { to { transform: translateY(100%); } }
 
 /* ---- Оверлеи ---- */
+/* Лист не доходит до нижнего края: под ним остаётся меню вкладок — видимое и
+   рабочее. Из карточки дня всегда есть куда уйти, а не только крестик наверху,
+   и приложение не превращается в лист, из которого не видно выхода. */
 .overlay {
-  position: fixed; inset: 0; z-index: 30; background: var(--scrim);
+  position: fixed; top: 0; left: 0; right: 0; bottom: var(--tabbar);
+  z-index: 30; background: var(--scrim);
   backdrop-filter: blur(10px); display: flex; align-items: flex-end;
   justify-content: center; overflow-y: auto;
 }
+/* Высота листа считается от самой подложки, а не от 94vh: на айфоне в vh
+   входит и то, что закрыто адресной строкой с панелью Safari. Лист от этого
+   получался выше видимого экрана, подложка уезжала в прокрутку вместе с
+   шапкой, и из карточки было нечем выйти — ни крестика, ни полоски фона,
+   по которой она закрывается. */
 .sheet, .align-wrap {
   width: 100%; max-width: 520px; background: var(--bg);
   border-radius: 22px 22px 0 0; border-top: 1px solid var(--line);
-  padding: 8px 20px calc(24px + env(safe-area-inset-bottom));
-  max-height: 94vh; overflow-y: auto;
+  /* Снизу лист упирается в меню вкладок, а не в край экрана: запас под
+     домашнюю полоску айфона уже учтён в его высоте. */
+  padding: 8px 20px 24px;
+  max-height: 94%; min-height: 0; overflow-y: auto;
 }
 .sheet-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -559,13 +570,15 @@ body.has-conn { --conn-h: 37px; }
 .sheet-head h2 { margin: 0; color: var(--text); text-transform: none;
                  letter-spacing: -0.01em; font-size: 18px; }
 
-/* Камера занимает экран целиком: сравнивать с призраком удобнее по-крупному. */
-.overlay-full { align-items: stretch; }
+/* Камера занимает экран целиком: сравнивать с призраком удобнее по-крупному.
+   Меню она закрывает намеренно — уходить с неё надо крестиком, чтобы камера
+   успела погаснуть. */
+.overlay-full { align-items: stretch; bottom: 0; }
 .ghost-wrap {
   width: 100%; max-width: 520px; margin: auto; background: var(--bg);
   border-radius: 22px 22px 0 0; border-top: 1px solid var(--line);
   padding: 8px 20px calc(20px + env(safe-area-inset-bottom));
-  max-height: 100vh; overflow-y: auto;
+  max-height: 100%; min-height: 0; overflow-y: auto;
 }
 .ghost-stage {
   position: relative; width: 100%; aspect-ratio: 1 / 1; background: #000;
