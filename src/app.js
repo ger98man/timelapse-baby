@@ -1,7 +1,7 @@
 import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
-import { formatBytes } from './img.js';
-import { drawAligned } from './align.js';
+import { formatBytes, loadImage, makeCanvas, canvasToBlob } from './img.js';
+import { drawAligned, renderSquareBlob } from './align.js';
 import { createGhostCamera, cameraError } from './ghost.js';
 import { buildVideo, videoSupported, pickMime, drawCaption } from './video.js';
 import { exportArchive, importArchive } from './archive.js';
@@ -126,11 +126,11 @@ function progressSet(done, total, label) {
 }
 function progressClose() { $('progress').classList.add('hidden'); }
 
-async function saveBlob(blob, filename) {
+async function saveBlob(blob, filename, title = filename) {
   const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: filename });
+      await navigator.share({ files: [file], title });
       return 'shared';
     } catch (e) {
       if (e && e.name === 'AbortError') return 'cancelled';
@@ -959,12 +959,14 @@ async function openDay(key) {
 
   if (entry && entry.fileId) {
     paintPhoto('day-photo', entry, body);
+    $('day-share').classList.remove('hidden');
     $('day-align').classList.remove('hidden');
     $('day-replace').classList.remove('hidden');
     $('day-add').classList.add('hidden');
     $('day-delete').classList.remove('hidden');
   } else {
     slot.innerHTML = '<div class="photo-empty"><p>За этот день фото нет</p></div>';
+    $('day-share').classList.add('hidden');
     $('day-align').classList.add('hidden');
     $('day-replace').classList.add('hidden');
     $('day-add').classList.remove('hidden');
@@ -1006,6 +1008,76 @@ async function saveComment(key, text) {
     await store.putComment(drive(), key, text);
   } catch (e) {
     toast(e.message || 'Комментарий не сохранился');
+  }
+}
+
+// --- поделиться одним днём --------------------------------------------------
+//
+// Таймлапс собирают раз в несколько месяцев, а «смотри, какой он сегодня»
+// отправляют каждый день — и до сих пор ради этого приходилось идти в галерею
+// телефона, где снимка нет: он лежит в общей папке, а не здесь.
+//
+// Кадр собирается тем же расчётом, что и кадр таймлапса: тот же квадрат, те же
+// глаза на своих местах, та же подпись. Отправленное сегодня и год спустя
+// встанет в одну строчку с тем, что окажется в видео.
+
+/** Выжигает подпись в готовый квадрат. Сторону берём у самого кадра. */
+async function withCaption(square, text) {
+  if (!text) return square;
+  const { img, width, release } = await loadImage(square);
+  try {
+    const canvas = makeCanvas(width, width);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    drawCaption(ctx, text, width);
+    return await canvasToBlob(canvas, 'image/jpeg', 0.9);
+  } finally {
+    release();
+  }
+}
+
+async function shareDay(key) {
+  if (!key) return;
+  const entry = await entries.get(key);
+  if (!entry || !entry.fileId) return;
+
+  let body = await blobs.get(key);
+  if (!body || !body.photo) {
+    // Снимка на телефоне нет — он и не должен тут жить. Без сети отправлять
+    // нечего, и честнее сказать это сразу, чем показать пустой квадрат.
+    if (!canPull()) {
+      toast('Нет сети — снимок лежит в общей папке, а не на телефоне', 3600);
+      return;
+    }
+    progressOpen('Готовлю кадр');
+    const got = await pullBody(key, { silent: false });
+    progressClose();
+    if (!got) return;
+    body = await blobs.get(key);
+  }
+  if (!body || !body.photo) { toast('Снимок не открылся'); return; }
+
+  const cfg = state.cfg;
+  let blob;
+  try {
+    // ensureBody уже мог собрать выровненный кадр — тогда переделывать нечего.
+    const square = body.aligned || await renderSquareBlob(body.photo,
+      { size: cfg.videoSize, eyes: entry.eyes, target: cfg.eyeTarget });
+    // Подпись здесь не спрашивает галочку «подписывать кадры»: та про видео,
+    // где счётчик идёт подряд и виден сам собой. Отдельный кадр уезжает к
+    // человеку, у которого нет ни календаря, ни соседних дней, — «День 47»
+    // и есть всё, что он о снимке узнает. Без даты рождения счётчика нет.
+    blob = await withCaption(square, cfg.birthDate ? captionFor(key) : '');
+  } catch (e) {
+    toast(e.message || 'Не удалось собрать кадр');
+    return;
+  }
+
+  const info = D.dayLabel(key, cfg);
+  const name = `${cfg.babyName || 'kadr'}-${key}.jpg`;
+  const title = cfg.birthDate ? `${info.label} · ${D.formatLong(key)}` : D.formatLong(key);
+  if (await saveBlob(blob, name, title) === 'downloaded') {
+    toast('Кадр сохранён в «Загрузки»');
   }
 }
 
@@ -1918,6 +1990,7 @@ function bind() {
   };
 
   $('btn-delete').onclick = () => removeDay(D.todayKey());
+  $('day-share').onclick = () => shareDay(dayKey);
   $('day-delete').onclick = () => removeDay(dayKey);
   $('day-close').onclick = closeDay;
   $('overlay-day').onclick = e => { if (e.target === $('overlay-day')) closeDay(); };
