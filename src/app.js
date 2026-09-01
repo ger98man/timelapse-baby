@@ -980,7 +980,7 @@ async function openDay(key) {
   $('day-comment').disabled = $('day-comment').disabled || !hasPhoto;
   $('day-comment').placeholder = hasPhoto
     ? 'Комментарий…' : 'Сначала добавьте фото за этот день';
-  $('overlay-day').classList.remove('hidden');
+  await overlay('overlay-day', true);
 
   // Открыли день — значит, снимок и правда нужен: качаем именно его одного.
   // Как и на «Сегодня», меняем только кадр, не трогая поле комментария.
@@ -995,7 +995,7 @@ async function openDay(key) {
 function closeDay() {
   clearTimeout(dayCommentTimer);
   if (dayKey) saveComment(dayKey, $('day-comment').value);
-  $('overlay-day').classList.add('hidden');
+  overlay('overlay-day', false);
   dayKey = null;
 }
 
@@ -1135,7 +1135,7 @@ async function openGhost(key) {
 
   $('ghost-title').textContent = D.dayLabel(key, state.cfg).label;
   setGhostHint('Включаю камеру…');
-  $('overlay-ghost').classList.remove('hidden');
+  await overlay('overlay-ghost', true);
 
   try {
     await cam.start();
@@ -1165,7 +1165,7 @@ function closeGhost() {
   if (state.ghost) state.ghost.cam.stop();
   state.ghost = null;
   showLive();
-  $('overlay-ghost').classList.add('hidden');
+  overlay('overlay-ghost', false);
 }
 
 /** Подсказку под кадром помним: после «Переснять» нужна та же самая. */
@@ -1267,7 +1267,7 @@ async function openAlign(key) {
                   l: eyes ? { x: eyes.lx, y: eyes.ly } : null,
                   r: eyes ? { x: eyes.rx, y: eyes.ry } : null, drag: null };
   drawDots();
-  $('overlay-align').classList.remove('hidden');
+  await overlay('overlay-align', true);
 }
 
 function drawDots() {
@@ -1343,7 +1343,7 @@ async function saveAlign() {
   }
   progressClose();
 
-  $('overlay-align').classList.add('hidden');
+  await overlay('overlay-align', false);
   state.align = null;
   freeUrls();
   await renderToday();
@@ -1822,6 +1822,40 @@ async function renderStorageCard(total) {
 
 // --- навигация --------------------------------------------------------------
 
+/**
+ * Подменяет разметку с переходом — тем самым, по которому приложение и
+ * отличается от страницы: одно перетекает в другое, а не сменяется рывком.
+ *
+ * Рисует переход браузер сам (View Transitions), от нас нужен только момент,
+ * когда меняется разметка. Где такого не умеют — меняем как раньше, разом:
+ * это оформление, без него всё работает. Так же поступаем, когда человек
+ * попросил систему поменьше двигать, — движение бывает и в тягость.
+ *
+ * Обещание разрешается на подмене, а не в конце анимации: содержимое экрана
+ * дорисовывается под неё. Дожидаться конца значило бы превратить переход в
+ * паузу перед работой.
+ */
+function transition(mutate) {
+  if (typeof document.startViewTransition !== 'function' ||
+      matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    mutate();
+    return Promise.resolve();
+  }
+  return document.startViewTransition(mutate).updateCallbackDone.catch(() => {});
+}
+
+/**
+ * Показать или спрятать оверлей: он выезжает снизу и уезжает вниз.
+ *
+ * Уже открытый не открываем заново. Дело не в экономии: новый переход обрывает
+ * идущий, и лист, который в этот момент уезжал, исчезал бы вместо этого разом.
+ */
+function overlay(id, show) {
+  const el = $(id);
+  if (el.classList.contains('hidden') === !show) return Promise.resolve();
+  return transition(() => el.classList.toggle('hidden', !show));
+}
+
 async function showScreen(name) {
   // Верстак живёт ровно столько, сколько человек стоит на экране видео.
   // Ушёл — от собранного года на телефоне не остаётся ничего.
@@ -1830,13 +1864,15 @@ async function showScreen(name) {
     await store.clearBench().catch(() => {});
   }
   state.screen = name;
-  freeUrls();
-  for (const s of document.querySelectorAll('.screen')) s.classList.add('hidden');
-  $('screen-' + name).classList.remove('hidden');
-  for (const t of document.querySelectorAll('.tab')) {
-    t.classList.toggle('tab-active', t.dataset.screen === name);
-  }
-  window.scrollTo(0, 0);
+  await transition(() => {
+    freeUrls();
+    for (const s of document.querySelectorAll('.screen')) s.classList.add('hidden');
+    $('screen-' + name).classList.remove('hidden');
+    for (const t of document.querySelectorAll('.tab')) {
+      t.classList.toggle('tab-active', t.dataset.screen === name);
+    }
+    window.scrollTo(0, 0);
+  });
   if (name === 'today') await renderToday();
   if (name === 'calendar') await renderCalendar();
   if (name === 'video') await initVideoScreen();
@@ -1926,7 +1962,7 @@ function bind() {
 
   $('btn-align').onclick = () => { if (requireOnline()) openAlign(D.todayKey()); };
   $('day-align').onclick = () => { if (requireOnline()) openAlign(dayKey); };
-  $('align-close').onclick = () => { $('overlay-align').classList.add('hidden'); state.align = null; };
+  $('align-close').onclick = () => { overlay('overlay-align', false); state.align = null; };
   $('align-reset').onclick = () => {
     state.align.l = null;
     state.align.r = null;

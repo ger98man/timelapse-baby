@@ -500,6 +500,34 @@ body.has-conn { --conn-h: 37px; }
 }
 .tab-active { color: var(--accent); }
 
+/* ---- Переходы ----
+   Экран не подменяется рывком, а перетекает; лист дня, разметки и камеры
+   выезжает снизу и уезжает вниз. Рисует это сам браузер — от разметки нужно
+   только имя для того, что переезжает: по имени он и понимает, что во что
+   превращается.
+
+   Имена у листов разные не для порядка: разметку открывают поверх дня, а одно
+   имя на двух видимых сразу элементах браузер считает ошибкой и переход
+   отменяет целиком. */
+.screen:not(.hidden) { view-transition-name: screen; }
+::view-transition-old(screen),
+::view-transition-new(screen) { animation-duration: .18s; }
+
+#overlay-day:not(.hidden) .sheet { view-transition-name: sheet-day; }
+#overlay-align:not(.hidden) .align-wrap { view-transition-name: sheet-align; }
+#overlay-ghost:not(.hidden) .ghost-wrap { view-transition-name: sheet-ghost; }
+
+/* Лист именно выезжает, а не проявляется: движение снизу — это и есть то,
+   чем в приложениях открывают такие карточки. */
+::view-transition-new(sheet-day),
+::view-transition-new(sheet-align),
+::view-transition-new(sheet-ghost) { animation: sheet-in .3s cubic-bezier(.22, 1, .36, 1); }
+::view-transition-old(sheet-day),
+::view-transition-old(sheet-align),
+::view-transition-old(sheet-ghost) { animation: sheet-out .22s ease-in; }
+@keyframes sheet-in { from { transform: translateY(100%); } }
+@keyframes sheet-out { to { transform: translateY(100%); } }
+
 /* ---- Оверлеи ---- */
 .overlay {
   position: fixed; inset: 0; z-index: 30; background: var(--scrim);
