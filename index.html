@@ -8,6 +8,35 @@
 <meta name="description" content="Ежедневное фото, календарь и таймлапс — приватно, на вашем телефоне.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<!-- Заставки: то, что айфон показывает, пока приложение просыпается. Без них
+     он показывает белый лист — по нему установленное приложение и опознаётся
+     как страница в браузере. Размеры перечислены поимённо, потому что iOS
+     ищет точное совпадение с экраном; картинки рисует tools/make-icons.py. -->
+<link rel="apple-touch-startup-image" href="icons/splash-640x1136.png"
+      media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"><!-- SE 1, 5s -->
+<link rel="apple-touch-startup-image" href="icons/splash-750x1334.png"
+      media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"><!-- SE 2 и 3, 6, 7, 8 -->
+<link rel="apple-touch-startup-image" href="icons/splash-1242x2208.png"
+      media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 8 Plus -->
+<link rel="apple-touch-startup-image" href="icons/splash-1125x2436.png"
+      media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- X, XS, 11 Pro, 12 mini, 13 mini -->
+<link rel="apple-touch-startup-image" href="icons/splash-828x1792.png"
+      media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"><!-- XR, 11 -->
+<link rel="apple-touch-startup-image" href="icons/splash-1242x2688.png"
+      media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- XS Max, 11 Pro Max -->
+<link rel="apple-touch-startup-image" href="icons/splash-1170x2532.png"
+      media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 12, 12 Pro, 13, 13 Pro, 14 -->
+<link rel="apple-touch-startup-image" href="icons/splash-1284x2778.png"
+      media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 12 Pro Max, 13 Pro Max, 14 Plus -->
+<link rel="apple-touch-startup-image" href="icons/splash-1179x2556.png"
+      media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 14 Pro, 15, 15 Pro, 16, 16e -->
+<link rel="apple-touch-startup-image" href="icons/splash-1290x2796.png"
+      media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 14 Pro Max, 15 Plus, 15 Pro Max, 16 Plus -->
+<link rel="apple-touch-startup-image" href="icons/splash-1206x2622.png"
+      media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 16 Pro -->
+<link rel="apple-touch-startup-image" href="icons/splash-1320x2868.png"
+      media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"><!-- 16 Pro Max -->
+
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
