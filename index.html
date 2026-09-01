@@ -285,10 +285,14 @@
     </header>
 
     <div class="today-body">
-      <div id="today-photo" class="photo-slot">
-        <div class="photo-empty">
-          <svg viewBox="0 0 24 24" width="42" height="42"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="13.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-          <p>Фото за этот день ещё нет</p>
+      <!-- Кадр живёт в отдельной обойме: ужимается она, а сам кадр остаётся
+           квадратом и только мельчает — иначе снимок пришлось бы резать по высоте. -->
+      <div id="today-frame">
+        <div id="today-photo" class="photo-slot">
+          <div class="photo-empty">
+            <svg viewBox="0 0 24 24" width="42" height="42"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="13.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+            <p>Фото за этот день ещё нет</p>
+          </div>
         </div>
       </div>
 

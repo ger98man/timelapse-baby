@@ -236,13 +236,20 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   flex: 1; min-height: 0; padding-bottom: 12px;
   display: flex; flex-direction: column;
 }
-#screen-today .today-body > :not(#today-photo),
+#screen-today .today-body > :not(#today-frame),
 #screen-video .pad > :not(#video-preview) { flex: none; }
 /* Кадр — квадрат во всю ширину, пока тот влезает, и единственный, кому можно
    ужаться, когда не влезает. Растягиваться сверх квадрата ему нечего. */
-#screen-today #today-photo, #screen-video #video-preview {
+#screen-today #today-frame, #screen-video #video-preview {
   flex: 0 1 auto; min-height: 0;
 }
+/* Ужимается обойма, а кадр внутри неё остаётся квадратом — просто мельче.
+   Иначе на невысоком экране квадратный снимок пришлось бы резать сверху и
+   снизу, а режется он ровно по лицу, ради которого всё и затевалось. */
+#today-frame {
+  width: 100%; aspect-ratio: 1 / 1; display: flex; justify-content: center;
+}
+#today-frame #today-photo { flex: none; width: auto; height: 100%; }
 /* Остаток высоты забирает полоска дней — она и должна стоять у нижнего края. */
 #screen-today #streak { margin-top: auto; }
 
@@ -258,8 +265,13 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
   background: var(--surface); border: 1px solid var(--line);
   display: grid; place-items: center; position: relative;
 }
+/* Кадр кладём поверх слота, а не внутрь потока: высота в процентах от слота,
+   который сам ужимается, считается по содержимому — то есть по этой же
+   картинке. Из-за этого снимок оставался в полный рост, вылезал из слота и
+   оборачивался белой полосой над кадром. */
 .photo-slot img, .photo-slot canvas {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block;
 }
 .photo-empty { color: var(--muted); text-align: center; padding: 20px; }
 .photo-empty p { font-size: 14px; margin: 12px 0 0; }
