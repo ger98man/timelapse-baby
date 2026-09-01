@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Проверка архива</title>
+<link rel="stylesheet" href="test.css">
+</head>
+<body>
+<h1>Проверка архива</h1>
+<p class="lead">Архив — единственное обещание, которое переживёт этот код:
+через восемнадцать лет откроется папка с JPEG, а не приложение. Значит,
+проверять надо ровно два свойства. Первое: что упаковали, то и распаковали —
+байт в байт, с русскими именами и подпапками. Второе: круг замыкается —
+альбом, выгруженный в архив и залитый обратно в пустую папку, даёт тот же
+альбом, с теми же комментариями и той же разметкой глаз. И отдельно —
+что испорченный архив об этом говорит, а не заливает мусор поверх целых
+дней.</p>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script type="module">
+import { createZip, readZip } from '../src/zip.js';
+import { exportArchive, importArchive } from '../src/archive.js';
+import { entries, blobs, settings, clearCache } from '../src/db.js';
+import * as store from '../src/store.js';
+import { caseOf, check, run, jpeg } from './harness.js';
+import { fakeDrive } from './fake-drive.js';
+
+const bytesOf = async blob => new Uint8Array(await blob.arrayBuffer());
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const byName = items => new Map(items.map(i => [i.name, i.blob]));
+
+run(async () => {
+  // --- сам формат -----------------------------------------------------------
+
+  caseOf('Что упаковали, то и распаковали');
+  const photo = await jpeg('#c96');
+  const raw = new Uint8Array([0, 1, 2, 253, 254, 255, 0, 0, 13, 10]);
+  const zip = await createZip([
+    { name: '2026/09/2026-09-14.jpg', data: photo },
+    { name: '2026/09/2026-09-14.txt', data: 'первый день дома\nвторая строка' },
+    { name: 'сырые байты.bin', data: raw },
+  ]);
+  const read = byName(await readZip(zip));
+  check('файлов столько же', read.size === 3, `их ${read.size}`);
+  check('подпапки в имени уцелели', read.has('2026/09/2026-09-14.jpg'));
+  check('русское имя уцелело', read.has('сырые байты.bin'));
+  check('снимок совпал байт в байт',
+    same(await bytesOf(read.get('2026/09/2026-09-14.jpg')), await bytesOf(photo)));
+  check('текст совпал вместе с переводами строк',
+    (await read.get('2026/09/2026-09-14.txt').text()) === 'первый день дома\nвторая строка');
+  check('двоичные байты не поехали',
+    same(await bytesOf(read.get('сырые байты.bin')), raw));
+
+  caseOf('Пустой и однофайловый архив тоже читаются');
+  check('пустой архив читается пустым', (await readZip(await createZip([]))).length === 0);
+  const one = await readZip(await createZip([{ name: 'a.txt', data: 'x' }]));
+  check('один файл — один файл', one.length === 1 && one[0].name === 'a.txt');
+
+  caseOf('Испорченный архив не проходит молча');
+  // Меняем байт внутри снимка: длины и оглавление на месте, содержимое — нет.
+  // Ровно так выглядит оборванная загрузка, дописанная до нужного размера.
+  const broken = await bytesOf(zip);
+  broken[80] = broken[80] ^ 0xFF;
+  let complained = '';
+  try {
+    await readZip(new Blob([broken]));
+  } catch (e) {
+    complained = e.message;
+  }
+  check('чтение остановилось', Boolean(complained), complained || 'ошибки не было');
+  check('и сказало, какой файл испорчен', /испорчен/.test(complained), complained);
+
+  caseOf('Не ZIP — это видно сразу');
+  let notZip = '';
+  try {
+    await readZip(new Blob(['вообще не архив']));
+  } catch (e) { notZip = e.message; }
+  check('сказано по-человечески', /не ZIP/.test(notZip), notZip);
+
+  // --- круг: альбом → архив → альбом ---------------------------------------
+
+  caseOf('Альбом уходит в архив целиком');
+  await clearCache();
+  await settings.merge({
+    driveFolderId: 'root', videoSize: 200,
+    babyName: 'Ева', birthDate: '2026-09-01',
+  });
+  const first = fakeDrive();
+  const days = ['2026-09-10', '2026-09-11', '2026-09-12'];
+  for (const d of days) await store.putPhoto(first, d, await jpeg('#9c6'));
+  await store.putComment(first, '2026-09-11', 'первая улыбка, «в кавычках», и запятая');
+  await store.putEyes(first, '2026-09-12', { lx: 0.41, ly: 0.38, rx: 0.59, ry: 0.40 });
+
+  // Снимков на телефоне нет — архив собирается из папки, а не из памяти вкладки.
+  await blobs.clear();
+  first.downloads.length = 0;
+  const { zip: archive, days: packed, skipped } = await exportArchive(first);
+  check('упакованы все дни', packed === days.length && skipped === 0,
+    JSON.stringify({ packed, skipped }));
+  check('оригиналы забраны из папки', first.pulled('photo') === days.length,
+    `скачано=${first.pulled('photo')}`);
+  check('оригиналы не осели на телефоне', (await blobs.count()) === 0);
+
+  const inside = byName(await readZip(archive));
+  check('снимки лежат по годам и месяцам', inside.has('2026/09/2026-09-10.jpg'));
+  check('комментарий лежит рядом со снимком', inside.has('2026/09/2026-09-11.txt'));
+  check('опись на месте', inside.has('index.csv'));
+  check('настройки на месте', inside.has('settings.json'));
+  check('объяснение формата на месте', inside.has('README.txt'));
+  const meta = JSON.parse(await inside.get('settings.json').text());
+  check('в настройках имя и дата рождения',
+    meta.babyName === 'Ева' && meta.birthDate === '2026-09-01', JSON.stringify(meta.babyName));
+
+  caseOf('И возвращается из архива тем же альбомом');
+  await clearCache();
+  await settings.merge({ driveFolderId: 'root', babyName: '', birthDate: null });
+  const second = fakeDrive();
+  const res = await importArchive(second, archive, { replace: false });
+  check('вернулись все дни', res.added === days.length && res.skipped === 0,
+    JSON.stringify({ added: res.added, skipped: res.skipped }));
+  check('в новой папке столько же снимков', second.count('photo') === days.length,
+    `photo=${second.count('photo')}`);
+  check('комментарий уцелел вместе с кавычками и запятой',
+    (await entries.get('2026-09-11')).comment === 'первая улыбка, «в кавычках», и запятая',
+    JSON.stringify((await entries.get('2026-09-11')).comment));
+  const eyes = (await entries.get('2026-09-12')).eyes;
+  check('разметка глаз уцелела',
+    eyes && Math.abs(eyes.lx - 0.41) < 1e-4 && Math.abs(eyes.ry - 0.40) < 1e-4,
+    JSON.stringify(eyes));
+  check('комментарий уехал в папку отдельным файлом', second.count('note') === 1);
+
+  caseOf('Повторный импорт не задваивает дни');
+  const again = await importArchive(second, archive, { replace: false });
+  check('все дни пропущены', again.added === 0 && again.skipped === days.length,
+    JSON.stringify({ added: again.added, skipped: again.skipped }));
+  check('снимков в папке не прибавилось', second.count('photo') === days.length);
+
+  await clearCache();
+  await settings.merge({ babyName: '', birthDate: null, driveFolderId: null, profileFileId: null });
+});
+</script>
+</body>
+</html>

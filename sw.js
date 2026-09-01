@@ -23,6 +23,7 @@ const SHELL = [
   './src/google.js',
   './src/drive.js',
   './src/store.js',
+  './src/pool.js',
   './src/picker.js',
   './src/onboarding.js',
   './src/profile.js',

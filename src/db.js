@@ -24,7 +24,9 @@
 export const DB_NAME = 'timelapse-baby';
 // 3 — версия, в которой хранилище снимков на диске удалено насовсем.
 // 4 — добавлен верстак сборки: временный и самостирающийся.
-const DB_VERSION = 4;
+// 5 — на верстаке появился отпечаток кадра и индекс по нему: считать, сколько
+//     кадров уже готово, надо уметь не поднимая сами кадры в память.
+const DB_VERSION = 5;
 
 let dbPromise = null;
 
@@ -51,8 +53,14 @@ function open() {
       if (db.objectStoreNames.contains('blobs')) {
         db.deleteObjectStore('blobs');
       }
+      // Верстак — самое выбрасываемое, что есть в базе: он и так вытирается
+      // при каждом запуске. Поэтому пересоздаём, а не переносим.
+      if (event.oldVersion < 5 && db.objectStoreNames.contains('bench')) {
+        db.deleteObjectStore('bench');
+      }
       if (!db.objectStoreNames.contains('bench')) {
-        db.createObjectStore('bench', { keyPath: 'date' });
+        db.createObjectStore('bench', { keyPath: 'date' })
+          .createIndex('stamp', 'stamp');
       }
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
@@ -153,6 +161,7 @@ export const entries = {
  * @property {string} date
  * @property {Blob} photo      мастер-кадр (jpeg)
  * @property {Blob} aligned    выровненный кадр для видео
+ * @property {string} stamp    чем собран выровненный кадр — размер и композиция
  */
 const memory = new Map();
 
@@ -200,8 +209,9 @@ export const blobs = {
  * @typedef {Object} Bench
  * @property {string} date
  * @property {Blob} aligned
- * @property {number} size   при каком размере кадра собрано: сменили размер —
- *                           запись негодна, и это видно без пересчёта
+ * @property {string} stamp  чем собрано — размер кадра и композиция: поменяли
+ *                           любое из двух, и запись негодна, а видно это без
+ *                           пересчёта
  */
 
 export const bench = {
@@ -223,6 +233,16 @@ export const bench = {
 
   allDates() {
     return run('bench', 'readonly', s => s.getAllKeys());
+  },
+
+  /**
+   * Дни, чей кадр собран этим же отпечатком, — одними датами, без самих
+   * кадров. Разница не косметическая: `get` на каждый день года поднял бы в
+   * память все триста шестьдесят пять кадров только ради того, чтобы их
+   * пересчитать.
+   */
+  datesWithStamp(stamp) {
+    return run('bench', 'readonly', s => s.index('stamp').getAllKeys(stamp));
   },
 
   count() {

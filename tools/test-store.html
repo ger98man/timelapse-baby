@@ -3,22 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Проверка хранилища</title>
-<style>
-  body { background:#12100E; color:#F5EFE7; font:15px/1.5 -apple-system, system-ui, sans-serif;
-         max-width:780px; margin:0 auto; padding:28px 20px 60px; }
-  h1 { font-size:20px; letter-spacing:-.01em; }
-  p.lead { color:#9A918A; }
-  .case { border:1px solid #332E2A; border-radius:12px; padding:14px 16px; margin:12px 0;
-          background:#1C1917; }
-  .case h2 { font-size:15px; margin:0 0 8px; }
-  .ok::before  { content:'✓ '; color:#7FBF7F; }
-  .bad::before { content:'✗ '; color:#E06A55; }
-  .row { font-size:13px; color:#C9C0B8; margin:3px 0; font-family:ui-monospace, Menlo, monospace; }
-  .bad { color:#E06A55; }
-  #summary { font-size:17px; font-weight:650; padding:14px 16px; border-radius:12px; margin-top:20px; }
-  .pass { background:#1F2E1F; color:#B7E3B7; }
-  .fail { background:#2E1C19; color:#F0A99B; }
-</style>
+<link rel="stylesheet" href="test.css">
 </head>
 <body>
 <h1>Проверка хранилища</h1>
@@ -36,117 +21,12 @@
 import { entries, blobs, bench, settings, clearCache } from '../src/db.js';
 import * as store from '../src/store.js';
 import { pushProfile } from '../src/profile.js';
-
-const out = document.getElementById('out');
-let failures = 0;
-let box;
-
-function caseOf(title) {
-  box = document.createElement('div');
-  box.className = 'case';
-  box.innerHTML = `<h2>${title}</h2>`;
-  out.appendChild(box);
-}
-function check(label, condition, detail = '') {
-  const row = document.createElement('div');
-  row.className = 'row ' + (condition ? 'ok' : 'bad');
-  row.textContent = label + (detail ? ` — ${detail}` : '');
-  box.appendChild(row);
-  if (!condition) failures++;
-}
-
-// --- поддельная папка -------------------------------------------------------
-function fakeDrive() {
-  const files = new Map();
-  let drive;
-  const downloads = [];      // что и сколько раз качали — главное в этих тестах
-  let seq = 0, sums = 0;
-  let clock = Date.now() - 3600000;
-  const tick = () => new Date(clock += 60000).toISOString();
-
-  drive = {
-    files,
-    downloads,
-    async findRoot(known) {
-      return { id: known || 'root', name: 'TimelapseBaby', ownedByMe: true,
-               appProperties: { everydayNamed: '1' } };
-    },
-    async nameRoot(root) { return root.name; },
-    async adoptRoot(id) { return id; },
-    async putDayFile({ dateKey, name, blob, kind, fileId, props }) {
-      const id = fileId || 'f' + (++seq);
-      const prev = files.get(id);
-      const appProperties = {
-        ...(prev ? prev.appProperties : {}),
-        everyday: '1', kind, ...(props || {}),
-      };
-      if (dateKey) appProperties.day = dateKey;
-      const modifiedTime = tick();
-      // Диск считает контрольную сумму содержимого; правка метаданных её не меняет
-      const md5Checksum = 'md5-' + (++sums);
-      files.set(id, { id, name, blob, modifiedTime, md5Checksum, appProperties });
-      return { id, modifiedTime, md5Checksum };
-    },
-    async updateProps(id, props) {
-      const f = files.get(id);
-      f.appProperties = { ...f.appProperties, ...props };
-      f.modifiedTime = tick();
-      return { id, modifiedTime: f.modifiedTime };
-    },
-    // Содержимое папки: приложение так добирается до config.json, когда на нём
-    // нет метки — например, в общей папке второго родителя.
-    async listChildren() {
-      return [...files.values()].filter(f => !f.trashed);
-    },
-    listCalls: 0,
-    async listDayFiles(rootId) {
-      drive.listCalls++;
-      return [...files.values()].filter(f => !f.trashed).map(f => ({
-        ...f,
-        appProperties: { ...f.appProperties },
-        // Google отдаёт ссылку на готовую миниатюру прямо в описи
-        thumbnailLink: f.appProperties.kind === 'photo' ? `thumb:${f.id}=s220` : undefined,
-      }));
-    },
-    async download(id) {
-      downloads.push(files.get(id).appProperties.kind || 'photo');
-      return files.get(id).blob;
-    },
-    async thumbLink(id) { return `thumb:${id}=s220`; },
-    async downloadThumb(link) {
-      const id = String(link).split(':')[1].split('=')[0];
-      downloads.push('thumb');
-      return files.get(id).blob;      // как будто Google уже уменьшил
-    },
-    // Диск не стирает файл, а помечает его как удалённый и держит 30 дней.
-    // Заглушка обязана делать так же, иначе «Вернуть» нечем проверить.
-    async trash(id) { files.get(id).trashed = true; },
-    async untrash(id) { files.get(id).trashed = false; },
-    pulled(kind) { return downloads.filter(k => k === kind).length; },
-    count(kind) {
-      return [...files.values()]
-        .filter(f => !f.trashed && f.appProperties.kind === kind).length;
-    },
-    inTrash() { return [...files.values()].filter(f => f.trashed).length; },
-    dayFile(day, kind = 'photo') {
-      return [...files.values()].find(f =>
-        !f.trashed && f.appProperties.day === day && f.appProperties.kind === kind);
-    },
-  };
-  return drive;
-}
-
-async function jpeg(tint) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 200;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = tint; ctx.fillRect(0, 0, 200, 200);
-  ctx.fillStyle = '#000'; ctx.fillRect(50, 70, 18, 18); ctx.fillRect(132, 70, 18, 18);
-  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
-}
+import { LANES } from '../src/pool.js';
+import { caseOf, check, run, jpeg } from './harness.js';
+import { fakeDrive } from './fake-drive.js';
 
 // --- прогон -----------------------------------------------------------------
-(async () => {
+run(async () => {
   await clearCache();
   await settings.merge({ driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null });
   const drive = fakeDrive();
@@ -353,17 +233,48 @@ async function jpeg(tint) {
   check('дата вернулась из папки', cfg.birthDate === '2026-09-01');
   check('лишних config.json нет', drive.count('config') === 1);
 
+  caseOf('Кадры для видео едут пачкой, а не по одному');
+  // Год кадров, скачанных по одному, — это год ожиданий ответа подряд.
+  // Пачка обязана быть шире одного и не шире, чем задумано: держать в памяти
+  // больше двух пачек оригиналов телефону нечем.
+  const many = fakeDrive({ latency: 20 });
+  await clearCache();
+  await settings.merge({ driveFolderId: 'root', videoSize: 200 });
+  const days = ['2026-10-01', '2026-10-02', '2026-10-03',
+                '2026-10-04', '2026-10-05', '2026-10-06'];
+  for (const d of days) await store.putPhoto(many, d, await jpeg('#69c'));
+  await store.refresh(many);
+  await blobs.clear();
+  await store.clearBench();
+  many.resetPeak();
+  const batch = await store.buildFrames(many, days);
+  check('собрались все дни', batch.frames.length === days.length && batch.missing === 0,
+    JSON.stringify({ frames: batch.frames.length, missing: batch.missing }));
+  check('кадры идут по порядку',
+    batch.frames.map(f => f.date).join() === days.join());
+  check('качали одновременно, а не по одному', many.peak() > 1,
+    `одновременно=${many.peak()}`);
+  check('но не шире, чем полос', many.peak() <= LANES,
+    `одновременно=${many.peak()}, полос=${LANES}`);
+
+  caseOf('Кадр на верстаке помнит, чем собран');
+  // Размер и композиция ездят между телефонами через config.json, поэтому
+  // лежащий кадр может оказаться собран не теми настройками, что стоят сейчас.
+  // Не заметить это значит собрать видео из кадров, которых человек не видел.
+  check('после сборки качать нечего', (await store.pendingFrames(days)) === 0);
+  await settings.merge({ videoSize: 300 });
+  check('сменили размер — верстак негоден',
+    (await store.pendingFrames(days)) === days.length);
+  await settings.merge({ videoSize: 200 });
+  check('вернули размер — кадры снова годятся',
+    (await store.pendingFrames(days)) === 0);
+  await settings.merge({ eyeTarget: { lx: 0.30, ly: 0.50, rx: 0.70, ry: 0.50 } });
+  check('сменили композицию — верстак тоже негоден',
+    (await store.pendingFrames(days)) === days.length);
+  await settings.merge({ eyeTarget: { lx: 0.375, ly: 0.42, rx: 0.625, ry: 0.42 } });
+
   await clearCache();
   await settings.merge({ babyName: '', birthDate: null, driveFolderId: null, profileFileId: null });
-
-  const s = document.getElementById('summary');
-  s.className = failures ? 'fail' : 'pass';
-  s.textContent = failures ? `Провалено проверок: ${failures}` : 'Все проверки прошли';
-})().catch(e => {
-  const s = document.getElementById('summary');
-  s.className = 'fail';
-  s.textContent = 'Тест упал: ' + e.message;
-  console.error(e);
 });
 </script>
 </body>

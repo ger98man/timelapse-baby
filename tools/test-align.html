@@ -3,22 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Проверка выравнивания</title>
-<style>
-  body { background:#FFF7F9; color:#2B2126; font:15px/1.5 -apple-system, system-ui, sans-serif;
-         max-width:780px; margin:0 auto; padding:28px 20px 60px; }
-  h1 { font-size:20px; letter-spacing:-.01em; }
-  p.lead { color:#7A6870; }
-  .case { border:1px solid #F0D9E1; border-radius:12px; padding:14px 16px; margin:12px 0;
-          background:#fff; }
-  .case h2 { font-size:15px; margin:0 0 8px; }
-  .ok::before  { content:'✓ '; color:#4F9E62; }
-  .bad::before { content:'✗ '; color:#C9314F; }
-  .row { font-size:13px; color:#5C4C53; margin:3px 0; font-family:ui-monospace, Menlo, monospace; }
-  .bad { color:#C9314F; }
-  #summary { font-size:17px; font-weight:650; padding:14px 16px; border-radius:12px; margin-top:20px; }
-  .pass { background:#E8F5EA; color:#2F6B3E; }
-  .fail { background:#FBE6EA; color:#93233B; }
-</style>
+<link rel="stylesheet" href="test.css">
 </head>
 <body>
 <h1>Проверка выравнивания</h1>
@@ -32,24 +17,7 @@
 
 <script type="module">
 import { fitTransform, DEFAULT_TARGET } from '../src/align.js';
-
-const out = document.getElementById('out');
-let failures = 0;
-let box;
-
-function caseOf(title) {
-  box = document.createElement('div');
-  box.className = 'case';
-  box.innerHTML = `<h2>${title}</h2>`;
-  out.appendChild(box);
-}
-function check(label, condition, detail = '') {
-  const row = document.createElement('div');
-  row.className = 'row ' + (condition ? 'ok' : 'bad');
-  row.textContent = label + (detail ? ` — ${detail}` : '');
-  box.appendChild(row);
-  if (!condition) failures++;
-}
+import { caseOf, check, run } from './harness.js';
 
 // --- та же арифметика, что делает канвас ------------------------------------
 // drawAligned ставит: translate(size/2) · rotate(angle) · scale · translate(-c).
@@ -85,7 +53,7 @@ const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
 const deg = r => r * 180 / Math.PI;
 
 // --- прогон -----------------------------------------------------------------
-(() => {
+run(() => {
   const SIZE = 1080;
 
   caseOf('Выравнивать нечего — и это не ошибка');
@@ -193,10 +161,7 @@ const deg = r => r * 180 / Math.PI;
     near(big.scale / small.scale, 1080 / 320, 1e-9),
     (big.scale / small.scale).toFixed(6));
 
-  const s = document.getElementById('summary');
-  s.className = failures ? 'fail' : 'pass';
-  s.textContent = failures ? `Провалено проверок: ${failures}` : 'Все проверки прошли';
-})();
+});
 </script>
 </body>
 </html>

@@ -19,6 +19,7 @@ import { entries, blobs, bench, settings, clearCache } from './db.js';
 import { toMaster } from './img.js';
 import { renderSquareBlob } from './align.js';
 import { TAG, describeFile } from './drive.js';
+import { inLanes } from './pool.js';
 import { pullProfile } from './profile.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
@@ -39,6 +40,18 @@ export function eyesFromProp(str) {
   const n = String(str).split(',').map(Number);
   if (n.length !== 4 || n.some(Number.isNaN)) return null;
   return { lx: n[0], ly: n[1], rx: n[2], ry: n[3] };
+}
+
+/**
+ * Чем помечен выровненный кадр. Кадр зависит от двух настроек — размера и
+ * композиции, — и обе ездят между телефонами через config.json. Значит,
+ * лежащий кадр может оказаться собран не по тем настройкам, что стоят
+ * сейчас, и отличить это надо до того, как он попадёт в видео.
+ */
+function frameStamp(cfg) {
+  const t = cfg.eyeTarget || {};
+  const at = ['lx', 'ly', 'rx', 'ry'].map(k => Number(t[k] || 0).toFixed(4)).join(',');
+  return `${cfg.videoSize}@${at}`;
 }
 
 function sameEyes(a, b) {
@@ -379,9 +392,10 @@ export async function ensureBody(drive, date, { cfg = null } = {}) {
     dirty = true;
   }
 
-  if (!body.aligned) {
+  if (!body.aligned || body.stamp !== frameStamp(conf)) {
     body.aligned = await renderSquareBlob(body.photo,
       { size: conf.videoSize, eyes: entry.eyes, target: conf.eyeTarget });
+    body.stamp = frameStamp(conf);
     dirty = true;
   }
 
@@ -412,29 +426,37 @@ export async function ensureBody(drive, date, { cfg = null } = {}) {
 // запуске: снимкам на устройстве оставаться по-прежнему негде.
 
 /**
- * Выровненный кадр за день. Три источника, по убыванию дешевизны: снимок уже
- * в памяти (день только что открывали), верстак (уже собирали в этот заход),
- * папка.
+ * Готовый кадр за день, без единого сетевого запроса: снимок уже в памяти
+ * (день только что открывали) или кадр лежит на верстаке (уже собирали в
+ * этот заход).
  *
- * Мастер-кадр по дороге не создаётся и никуда не кладётся. Разметка глаз
- * задана в долях от размера снимка, поэтому одинаково ложится и на оригинал
- * из папки; скачанный файл живёт до конца следующей строки.
+ * Годится он, только если собран тем же размером и той же композицией, —
+ * иначе в видео уедет кадр, которого человек на экране не видел.
  */
-async function alignedFor(drive, date, cfg) {
+async function readyFrame(date, cfg) {
+  const stamp = frameStamp(cfg);
   const body = await blobs.get(date);
-  if (body && body.aligned) return body.aligned;
+  if (body && body.aligned && body.stamp === stamp) return body.aligned;
 
   const kept = await bench.get(date);
-  if (kept && kept.size === cfg.videoSize) return kept.aligned;
+  if (kept && kept.aligned && kept.stamp === stamp) return kept.aligned;
 
+  return null;
+}
+
+/**
+ * Кадр из оригинала: скачанный файл превращается в квадрат и ложится на
+ * верстак. Мастер-кадр по дороге не создаётся и никуда не кладётся —
+ * разметка глаз задана в долях от размера снимка, поэтому одинаково ложится
+ * и на оригинал из папки.
+ */
+async function frameFromRaw(date, raw, cfg) {
   const entry = await entries.get(date);
-  if (!entry || !entry.fileId || !drive) return null;
-
-  const raw = await drive.download(entry.fileId);
   const aligned = await renderSquareBlob(raw, {
-    size: cfg.videoSize, eyes: entry.eyes, target: cfg.eyeTarget, quality: 0.88,
+    size: cfg.videoSize, eyes: entry ? entry.eyes : null,
+    target: cfg.eyeTarget, quality: 0.88,
   });
-  await bench.put({ date, aligned, size: cfg.videoSize });
+  await bench.put({ date, aligned, stamp: frameStamp(cfg) });
   return aligned;
 }
 
@@ -442,46 +464,89 @@ async function alignedFor(drive, date, cfg) {
  * Кадры для сборки — всё, что удалось собрать, и счёт того, что не удалось:
  * один недокачанный день не должен ронять годовое видео.
  *
+ * Порядок работы здесь важнее, чем кажется. Сначала разбираем то, что уже
+ * готово, — это бесплатно и сразу двигает полоску. Остальное качается
+ * пачками (см. `pool.js`), а вот превращается в кадры по одному: декодировать
+ * четыре двухтысячепиксельных снимка разом телефон не обязан, и весь смысл
+ * пачек — занять сеть, а не память.
+ *
  * @returns {Promise<{frames: Array<{date:string, blob:Blob}>, missing:number}>}
  */
 export async function buildFrames(drive, dates, { onProgress = () => {} } = {}) {
   const cfg = await settings.all();
+  const ready = new Array(dates.length).fill(null);
+  const wanted = [];
+  let done = 0;
+
+  onProgress(0, dates.length, 'Готовлю кадры');
+  for (let i = 0; i < dates.length; i++) {
+    ready[i] = await readyFrame(dates[i], cfg);
+    if (ready[i]) onProgress(++done, dates.length, 'Готовлю кадры');
+    else wanted.push(i);
+  }
+
+  const pull = async i => {
+    const entry = await entries.get(dates[i]);
+    if (!entry || !entry.fileId || !drive) return null;
+    return drive.download(entry.fileId);
+  };
+
+  for await (const got of inLanes(wanted, pull)) {
+    const i = got.item;
+    if (got.value) {
+      try {
+        ready[i] = await frameFromRaw(dates[i], got.value, cfg);
+      } catch {
+        ready[i] = null;      // кадр не собрался — день просто не попадёт в видео
+      }
+    }
+    onProgress(++done, dates.length, 'Готовлю кадры');
+  }
+
   const frames = [];
   let missing = 0;
   for (let i = 0; i < dates.length; i++) {
-    onProgress(i, dates.length, 'Готовлю кадры');
-    let blob = null;
-    try {
-      blob = await alignedFor(drive, dates[i], cfg);
-    } catch {
-      blob = null;
-    }
-    if (blob) frames.push({ date: dates[i], blob });
+    if (ready[i]) frames.push({ date: dates[i], blob: ready[i] });
     else missing++;
   }
-  onProgress(dates.length, dates.length, 'Готовлю кадры');
   return { frames, missing };
 }
 
 /**
  * Мастер-кадр за день — для архива, который состоит из оригиналов.
  *
- * Путь тот же: память, верстак, папка. Пережимать скачанное незачем — в папке
- * лежит ровно то, что приложение туда положило, это и есть мастер.
+ * Путь короткий: память, папка. Пережимать скачанное незачем — в папке лежит
+ * ровно то, что приложение туда положило, это и есть мастер.
+ *
+ * На верстак оригинал не ложится, и это не экономия, а прямое требование:
+ * архив всё равно упаковывается за один заход, а верстак вытирается сразу
+ * после него. Год оригиналов, записанный в базу и тут же оттуда стёртый, —
+ * это лишние сотни мегабайт записи на телефоне и повод упереться в квоту
+ * ровно посередине выгрузки. Скачанный файл живёт ссылкой в собираемом
+ * архиве, и этого достаточно.
  */
 export async function masterFor(drive, date) {
   const body = await blobs.get(date);
   if (body && body.photo) return body.photo;
 
-  const kept = await bench.get(date);
-  if (kept && kept.photo) return kept.photo;
-
   const entry = await entries.get(date);
   if (!entry || !entry.fileId || !drive) return null;
 
-  const photo = await drive.download(entry.fileId);
-  await bench.put({ ...(kept || {}), date, photo });
-  return photo;
+  return drive.download(entry.fileId);
+}
+
+/**
+ * Оригиналы за несколько дней, по порядку и пачками, — для выгрузки архива.
+ * День, который не удалось забрать, приезжает как null: один недоступный
+ * снимок не должен ронять весь архив.
+ *
+ * @param {string[]} dates
+ * @param {(date:string, photo:?Blob) => (void|Promise<void>)} onDay
+ */
+export async function eachMaster(drive, dates, onDay) {
+  for await (const got of inLanes(dates, date => masterFor(drive, date))) {
+    await onDay(got.item, got.value || null);
+  }
 }
 
 /**
@@ -501,8 +566,12 @@ export async function eyesBefore(date) {
 
 /** Сколько дней промежутка придётся качать — чтобы сказать это до сборки. */
 export async function pendingFrames(dates) {
-  const ready = new Set(await blobs.allDates());
-  for (const date of await bench.allDates()) ready.add(date);
+  const stamp = frameStamp(await settings.all());
+  const ready = new Set(await bench.datesWithStamp(stamp));
+  for (const date of await blobs.allDates()) {
+    const body = await blobs.get(date);      // это память вкладки, а не диск
+    if (body && body.aligned && body.stamp === stamp) ready.add(date);
+  }
   return dates.filter(date => !ready.has(date)).length;
 }
 
@@ -541,7 +610,7 @@ export async function putPhoto(drive, date, file) {
   };
   await bench.delete(date);
   previewCache.delete(date);         // ссылка вела на прежний снимок
-  await blobs.put({ date, photo: blob, aligned });
+  await blobs.put({ date, photo: blob, aligned, stamp: frameStamp(cfg) });
   await entries.put(entry);
   return entry;
 }
@@ -570,7 +639,7 @@ export async function putEyes(drive, date, eyes) {
   const aligned = await renderSquareBlob(loaded.body.photo,
     { size: cfg.videoSize, eyes, target: cfg.eyeTarget });
   await bench.delete(date);          // на верстаке кадр по старым глазам
-  await blobs.put({ date, photo: loaded.body.photo, aligned });
+  await blobs.put({ date, photo: loaded.body.photo, aligned, stamp: frameStamp(cfg) });
   await entries.put(fresh);
   return fresh;
 }

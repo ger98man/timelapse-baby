@@ -1,0 +1,16 @@
+/* Общее оформление проверочных страниц: они читаются глазами, а значит
+   должны выглядеть одинаково и говорить одно и то же. */
+body { background:#12100E; color:#F5EFE7; font:15px/1.5 -apple-system, system-ui, sans-serif;
+       max-width:780px; margin:0 auto; padding:28px 20px 60px; }
+h1 { font-size:20px; letter-spacing:-.01em; }
+p.lead { color:#9A918A; }
+.case { border:1px solid #332E2A; border-radius:12px; padding:14px 16px; margin:12px 0;
+        background:#1C1917; }
+.case h2 { font-size:15px; margin:0 0 8px; }
+.ok::before  { content:'✓ '; color:#7FBF7F; }
+.bad::before { content:'✗ '; color:#E06A55; }
+.row { font-size:13px; color:#C9C0B8; margin:3px 0; font-family:ui-monospace, Menlo, monospace; }
+.bad { color:#E06A55; }
+#summary { font-size:17px; font-weight:650; padding:14px 16px; border-radius:12px; margin-top:20px; }
+.pass { background:#1F2E1F; color:#B7E3B7; }
+.fail { background:#2E1C19; color:#F0A99B; }

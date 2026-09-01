@@ -125,6 +125,13 @@ async function measure(data) {
 
 /**
  * Читает ZIP по центральной директории.
+ *
+ * Контрольная сумма каждого файла проверяется, и это не педантизм: архив
+ * приезжает из мессенджера, с флешки, из чужой выгрузки — и оборванная
+ * загрузка выглядит как обычный файл. Не проверить сумму значит залить в
+ * общую папку испорченный снимок поверх целого дня и узнать об этом
+ * через год, когда исходник уже не найти.
+ *
  * @returns {Promise<Array<{name:string, blob:Blob}>>}
  */
 export async function readZip(blob) {
@@ -145,6 +152,7 @@ export async function readZip(blob) {
   for (let i = 0; i < count; i++) {
     if (dv.getUint32(p, true) !== 0x02014b50) break;
     const method = dv.getUint16(p + 10, true);
+    const crc = dv.getUint32(p + 16, true);
     const compSize = dv.getUint32(p + 20, true);
     const nameLen = dv.getUint16(p + 28, true);
     const extraLen = dv.getUint16(p + 30, true);
@@ -169,6 +177,13 @@ export async function readZip(blob) {
       bytes = new Uint8Array(await new Response(stream).arrayBuffer());
     } else if (method !== 0) {
       throw new Error(`Неподдерживаемый метод сжатия в «${name}»`);
+    }
+
+    // Ноль в этом поле — законное «сумма не посчитана», такое пишут потоковые
+    // упаковщики. Всё остальное обязано сойтись.
+    if (crc && crc32(bytes) !== crc) {
+      throw new Error(`Файл «${name}» в архиве испорчен — архив прочитан не до конца ` +
+        'или повреждён при передаче.');
     }
 
     out.push({ name, blob: new Blob([bytes]) });

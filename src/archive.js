@@ -57,9 +57,10 @@ function parseCsv(text) {
 /**
  * Собирает архив из оригиналов.
  *
- * На телефоне их нет: снимки лежат в папке и качаются по ходу упаковки, на
- * верстак, который вытирается сразу после выгрузки. Год фотографий не должен
- * оседать на устройстве только потому, что архив один раз выгрузили.
+ * На телефоне их нет: снимки лежат в папке и качаются по ходу упаковки —
+ * пачками, чтобы не ждать Диск по одному разу на день. В базу они при этом
+ * не ложатся вовсе: год фотографий не должен оседать на устройстве только
+ * потому, что архив один раз выгрузили.
  *
  * Без сети (drive = null) дни без снимка просто не попадут в архив — их число
  * возвращается отдельно, чтобы человеку не пришлось догадываться, почему в
@@ -74,18 +75,15 @@ export async function exportArchive(drive, onProgress) {
   const csv = [['date', 'comment', 'eye_lx', 'eye_ly', 'eye_rx', 'eye_ry'].join(',')];
   let packed = 0, skipped = 0;
 
-  for (let i = 0; i < dates.length; i++) {
-    const date = dates[i];
+  // Оригиналы едут пачками и приезжают по порядку: год — это сотни запросов
+  // к Диску, и ждать ответа по одному значит потерять минуты на пустом месте.
+  let seen = 0;
+  await store.eachMaster(drive, dates, async (date, photo) => {
+    if (onProgress) onProgress(++seen, dates.length, 'Собираю файлы');
     const e = await entries.get(date);
-    if (!e) continue;
+    if (!e) return;
     const [y, m] = date.split('-');
     const stamp = new Date(e.modifiedTime || date);
-    let photo = null;
-    try {
-      photo = await store.masterFor(drive, date);
-    } catch {
-      photo = null;   // один недоступный день не должен ронять весь архив
-    }
     if (photo) {
       files.push({ name: `${y}/${m}/${date}.jpg`, data: photo, date: stamp });
       packed++;
@@ -99,8 +97,7 @@ export async function exportArchive(drive, onProgress) {
     csv.push([date, csvEscape(e.comment || ''),
       ey ? ey.lx.toFixed(5) : '', ey ? ey.ly.toFixed(5) : '',
       ey ? ey.rx.toFixed(5) : '', ey ? ey.ry.toFixed(5) : ''].join(','));
-    if (onProgress) onProgress(i + 1, dates.length, 'Собираю файлы');
-  }
+  });
 
   const meta = {
     babyName: cfg.babyName,
