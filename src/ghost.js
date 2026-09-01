@@ -76,8 +76,9 @@ export function drawFaceGuide(ctx, size, target) {
  * погасить. Про DOM оверлея, вчерашний кадр и настройки не знает ничего —
  * их приносит вызывающий.
  */
-export function createGhostCamera({ video, guide, target }) {
+export function createGhostCamera({ video, guide, still, target }) {
   let stream = null;
+  let frozen = false;
   let facing = 'environment';
   let ghostImg = null;
   let ghostAlpha = 0.35;
@@ -103,6 +104,9 @@ export function createGhostCamera({ video, guide, target }) {
       stream = null;
     }
     video.srcObject = null;
+    // Снятый кадр держать незачем: его либо сохранили, либо от него отказались.
+    frozen = false;
+    still.width = still.height = 0;
   }
 
   async function flip() {
@@ -149,31 +153,47 @@ export function createGhostCamera({ video, guide, target }) {
    *
    * Квадрат берётся ровно тот, что человек видел — video стоит с object-fit:
    * cover в квадратном окне, — иначе совпадение с призраком было бы враньём.
+   *
+   * Это один синхронный drawImage: кадр фиксируется в то самое мгновение,
+   * когда человек нажал, и дальше держать телефон ровно уже незачем. Сжатие
+   * и заливка идут потом и на снятое повлиять не могут.
    */
-  async function shoot(quality = 0.92) {
+  function capture() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) throw new Error('Камера ещё не готова');
     const side = Math.min(vw, vh);
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = side;
-    const ctx = canvas.getContext('2d');
+    still.width = still.height = side;
+    const ctx = still.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
 
     // Фронтальная камера показывает зеркальное изображение — снимаем как
     // видели, иначе человек нажимает на одно, а получает отражение.
     if (facing === 'user') {
-      ctx.translate(side, 0);
-      ctx.scale(-1, 1);
+      ctx.setTransform(-1, 0, 0, 1, side, 0);
+    } else {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     ctx.drawImage(video, (vw - side) / 2, (vh - side) / 2, side, side, 0, 0, side, side);
+    frozen = true;
+  }
 
+  /** JPEG уже снятого кадра. Сжимаем только то, что решили оставить. */
+  function blob(quality = 0.92) {
+    if (!frozen) return Promise.reject(new Error('Кадр ещё не снят'));
     return new Promise((resolve, reject) => {
-      canvas.toBlob(b => b ? resolve(b) : reject(new Error('Кадр не получился')),
+      still.toBlob(b => b ? resolve(b) : reject(new Error('Кадр не получился')),
         'image/jpeg', quality);
     });
   }
 
-  return { start, stop, flip, shoot, setGhost, setAlpha };
+  /** Забыть снятое и вернуться к живой картинке. */
+  function resume() {
+    frozen = false;
+  }
+
+  const captured = () => frozen;
+
+  return { start, stop, flip, capture, blob, resume, captured, setGhost, setAlpha };
 }
 
 export { cameraError };

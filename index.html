@@ -568,6 +568,9 @@
 
     <div id="ghost-stage" class="ghost-stage">
       <video id="ghost-video" playsinline muted autoplay></video>
+      <!-- Снятый кадр ложится поверх живой картинки: с этого мгновения
+           держать телефон ровно уже незачем, и это видно. -->
+      <canvas id="ghost-still" class="ghost-still hidden"></canvas>
       <canvas id="ghost-guide" class="ghost-guide" width="720" height="720"></canvas>
     </div>
 
@@ -578,9 +581,15 @@
       <input id="ghost-opacity" type="range" min="0" max="70" step="5" value="35">
     </label>
 
-    <div class="row">
+    <div class="row" id="ghost-live-row">
       <button id="ghost-flip" class="btn grow">Другая камера</button>
       <button id="ghost-shoot" class="btn btn-primary grow">Снять</button>
+    </div>
+    <!-- Кадр снят и заморожен. Пока не нажали «Сохранить», в папку не ушло
+         ничего: посмотреть, сравнить с призраком и переснять — бесплатно. -->
+    <div class="row hidden" id="ghost-shot-row">
+      <button id="ghost-retake" class="btn grow">Переснять</button>
+      <button id="ghost-save" class="btn btn-primary grow">Сохранить</button>
     </div>
     <p class="hint">Снимает встроенная камера браузера — она проще системной:
       без HDR и ночного режима. Если важнее качество, снимайте кнопкой «Снять»,

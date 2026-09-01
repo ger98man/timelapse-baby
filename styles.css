@@ -539,6 +539,17 @@ body.has-conn { --conn-h: 37px; }
   position: absolute; inset: 0; width: 100%; height: 100%;
   display: block; pointer-events: none;
 }
+/* Снятый кадр — поверх видео и под призраком: сравнивать надо именно с ним. */
+.ghost-still {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+/* Вспышка затвора: мгновение съёмки должно быть видно, а не угадываться. */
+.ghost-stage.flash::after {
+  content: ''; position: absolute; inset: 0; background: #fff;
+  animation: shutter .22s ease-out forwards;
+}
+@keyframes shutter { from { opacity: .85; } to { opacity: 0; } }
 
 .align-stage {
   position: relative; width: 100%; background: #000; border-radius: var(--radius);

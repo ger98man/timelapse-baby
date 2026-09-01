@@ -1055,12 +1055,14 @@ async function openGhost(key) {
   const cam = createGhostCamera({
     video: $('ghost-video'),
     guide: $('ghost-guide'),
+    still: $('ghost-still'),
     target: state.cfg.eyeTarget,
   });
-  state.ghost = { cam, key };
+  state.ghost = { cam, key, hint: '' };
+  showLive();
 
   $('ghost-title').textContent = D.dayLabel(key, state.cfg).label;
-  $('ghost-hint').textContent = 'Включаю камеру…';
+  setGhostHint('Включаю камеру…');
   $('overlay-ghost').classList.remove('hidden');
 
   try {
@@ -1077,28 +1079,83 @@ async function openGhost(key) {
   if (!state.ghost) return;            // успели закрыть, пока ехала миниатюра
   if (prev) {
     cam.setGhost(prev.img, prev.eyes);
-    $('ghost-hint').textContent =
-      'Совместите голову с бледным кадром за ' + D.formatLong(prev.date).replace(/ \d{4}$/, '') + '.';
+    setGhostHint('Совместите голову с бледным кадром за ' +
+      D.formatLong(prev.date).replace(/ \d{4}$/, '') + '.');
   } else {
     // Первый кадр в альбоме: совмещать не с чем, зато овал уже задаёт, как
     // будут выглядеть все следующие.
-    $('ghost-hint').textContent = 'Первый кадр — по нему выстроятся остальные. ' +
-      'Впишите голову в овал, глаза на линию.';
+    setGhostHint('Первый кадр — по нему выстроятся остальные. ' +
+      'Впишите голову в овал, глаза на линию.');
   }
 }
 
 function closeGhost() {
   if (state.ghost) state.ghost.cam.stop();
   state.ghost = null;
+  showLive();
   $('overlay-ghost').classList.add('hidden');
 }
 
-async function shootGhost() {
+/** Подсказку под кадром помним: после «Переснять» нужна та же самая. */
+function setGhostHint(text) {
+  if (state.ghost) state.ghost.hint = text;
+  $('ghost-hint').textContent = text;
+}
+
+/** Живая картинка: снимаем, пока не сняли. */
+function showLive() {
+  $('ghost-still').classList.add('hidden');
+  $('ghost-live-row').classList.remove('hidden');
+  $('ghost-shot-row').classList.add('hidden');
+}
+
+/**
+ * Снимок фиксируется по нажатию и сразу застывает на экране.
+ *
+ * Раньше кадр уезжал в папку тем же нажатием, а на экране всё это время
+ * шевелилась живая картинка — и выходило, что съёмка будто длится секунды и
+ * телефон надо держать ровно до конца. На самом деле кадр берётся мгновенно,
+ * а секунды уходят на сжатие и заливку. Теперь это видно: вспышка, застывший
+ * кадр и вопрос «сохранить или переснять». В папку до «Сохранить» не уходит
+ * ничего, поэтому переснимать можно сколько угодно.
+ */
+function shootGhost() {
+  const g = state.ghost;
+  if (!g) return;
+  try {
+    g.cam.capture();
+  } catch (e) {
+    toast(e.message || 'Кадр не получился');
+    return;
+  }
+
+  const stage = $('ghost-stage');
+  stage.classList.remove('flash');
+  void stage.offsetWidth;              // перезапуск анимации на втором дубле
+  stage.classList.add('flash');
+
+  $('ghost-still').classList.remove('hidden');
+  $('ghost-live-row').classList.add('hidden');
+  $('ghost-shot-row').classList.remove('hidden');
+  $('ghost-hint').textContent =
+    'Кадр снят. Сравните с бледным вчера — и сохраняйте. В папку он уйдёт ' +
+    'только по «Сохранить».';
+}
+
+function retakeGhost() {
+  const g = state.ghost;
+  if (!g) return;
+  g.cam.resume();
+  showLive();
+  $('ghost-hint').textContent = g.hint;
+}
+
+async function saveGhost() {
   const g = state.ghost;
   if (!g) return;
   let file;
   try {
-    file = await g.cam.shoot(state.cfg.masterQuality);
+    file = await g.cam.blob(state.cfg.masterQuality);
   } catch (e) {
     toast(e.message || 'Кадр не получился');
     return;
@@ -1780,6 +1837,8 @@ function bind() {
   $('btn-ghost').onclick = () => openGhost(D.todayKey());
   $('ghost-close').onclick = closeGhost;
   $('ghost-shoot').onclick = shootGhost;
+  $('ghost-retake').onclick = retakeGhost;
+  $('ghost-save').onclick = saveGhost;
   $('ghost-flip').onclick = async () => {
     if (!state.ghost) return;
     try {
