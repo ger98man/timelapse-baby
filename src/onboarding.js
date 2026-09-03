@@ -56,11 +56,13 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       remoteDays: 0,
       remoteProfile: false,
       reauth: false,
-      ownRoot: null,        // своя папка в Диске, если она не та, что подключена
-      // Главная папка: одна на человека, внутри неё альбомы детей. Пустая
-      // строка — законно: второму родителю дают доступ на папку ребёнка,
-      // а не на весь дом первого.
+      // Главная папка: одна на человека, внутри неё альбомы детей. Пусто —
+      // законно: второму родителю дают доступ на папку ребёнка, а не на весь
+      // дом первого.
+      homeId: cfg.homeFolderId,
       homeName: cfg.homeFolderId ? cfg.homeFolderName : '',
+      albums: [],
+      creating: false,      // «Про кого снимаем» открыт ради нового альбома
     };
 
     // В мастере токен просим интерактивно: человек прямо сейчас у экрана и
@@ -72,7 +74,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     // Набор шагов подстраивается на ходу: «Про кого снимаем» отпадает, если
     // настройки уже приехали из папки, а «На домашний экран» — если приложение
     // и так запущено с него.
-    const steps = ['welcome', 'signin', 'folder', 'baby'];
+    const steps = ['welcome', 'signin', 'home', 'album', 'baby'];
     if (!standalone()) steps.push('install');
     steps.push('invite', 'done');
 
@@ -81,13 +83,17 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       if (i > at) steps.splice(i, 1);
     }
 
+    /** Вернуть выброшенный шаг: «Про кого снимаем» нужен снова, когда завели
+     *  новый альбом — там ещё никто не спрашивал ни имени, ни даты. */
+    function addStep(name, after) {
+      if (steps.includes(name)) return;
+      const i = steps.indexOf(after);
+      steps.splice(i < 0 ? steps.length : i + 1, 0, name);
+    }
+
     let at = 0;
 
     const pane = name => document.querySelector(`.step[data-step="${name}"]`);
-
-    // Подсказку под папкой некоторые случаи переписывают под себя. Держим
-    // исходную, иначе разовое предупреждение остаётся висеть навсегда.
-    const folderHint = $('wiz-folder-hint').textContent;
 
     function renderChrome() {
       const dots = $('wiz-dots');
@@ -124,283 +130,64 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     }
 
     /**
-     * Папки нет — спрашиваем, кто пришёл. Заводить её молча нельзя: у второго
-     * родителя от этого появляется собственный пустой альбом рядом с общим,
-     * и дальше он снимает не туда, ничего не подозревая.
+     * Главной папки нет — спрашиваем, кто пришёл. Заводить её молча нельзя:
+     * у второго родителя от этого появляется собственный пустой альбом рядом
+     * с общим, и дальше он снимает не туда, ничего не подозревая.
      */
     function askWhoYouAre() {
-      $('wiz-folder-text').textContent =
-        'Папки пока нет. Если альбом заводите вы — создайте её. Если снимать ' +
-        'уже начал второй родитель — подключитесь к его папке.';
-      $('wiz-folder-choice').classList.remove('hidden');
-      $('wiz-pick-folder').classList.toggle('hidden', !pickerReady());
+      $('wiz-home-text').textContent =
+        'Папки пока нет. Если снимать начинаете вы — заведу её в вашем Диске. ' +
+        'Если начал второй родитель — подключитесь к его папке.';
+      $('wiz-home-ok').classList.add('hidden');
+      $('wiz-home-choice').classList.remove('hidden');
+      $('wiz-home-pick').classList.toggle('hidden', !pickerReady());
       setNext(null);
     }
 
     /**
-     * Папка есть: показать, запомнить и забрать из неё настройки.
+     * Главная папка известна: показать и запомнить.
      *
-     * @param {boolean} found найдена сама, а не заведена и не выбрана руками.
-     *        Разница важна: найденная своя пустая папка — ровно та ловушка,
-     *        из-за которой второй родитель начинает снимать в отдельный альбом.
+     * Её может не быть и законно: второму родителю дают доступ на папку одного
+     * ребёнка, а не на весь дом первого. Тогда в карточке стоит сам альбом, и
+     * это честнее, чем показывать пустое место.
      */
-    async function useFolder(root, { found = false } = {}) {
-      const name = root.name;
-
-      state.folderId = root.id;
-      state.folderName = name;
-      await settings.merge({ driveFolderId: root.id, driveFolderName: name });
-
-      $('wiz-folder-choice').classList.add('hidden');
-      $('wiz-folder-hint').textContent = folderHint;
-      $('wiz-folder-text').textContent =
-        'Готово. Всё, что вы снимете, будет складываться сюда.';
-      showFolderCard(name);
-      $('wiz-folder-ok').classList.remove('hidden');
-      // Выход есть всегда, а не только когда папку не нашли: приложение могло
-      // наткнуться на старую свою папку, а человек пришёл в общую — или
-      // наоборот, подключился к чужой, а хочет собственный альбом.
-      $('wiz-folder-other').classList.toggle('hidden', !pickerReady());
-      // Своя папка уже есть — заводить вторую такую же незачем: это тот самый
-      // второй пустой альбом рядом с первым. Кнопка остаётся только в чужой
-      // папке, где она и значит «хочу собственный альбом».
-      $('wiz-folder-new').classList.toggle('hidden', Boolean(root.ownedByMe));
-      resetNewFolder();
-      setNext('Дальше', true);
-      await findOwnRoot(root.id);
-
-      // В этой же папке лежат и настройки, и вся история. Если они там
-      // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
-      const files = await drive.listDayFiles(root.id);
-      state.remoteDays = countRemoteDays(files);
-      const remote = await fetchProfile(drive, files);
-      state.remoteProfile = Boolean(remote && remote.birthDate);
-      if (remote && remote.birthDate) {
-        const patch = {};
-        for (const key of PROFILE_KEYS) {
-          if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
-        }
-        await settings.merge(patch);
-      }
-
-      // Спрашивать «про кого снимаем» есть смысл, только если ответа нет
-      // нигде. Дата могла приехать из папки, а могла остаться с прошлого
-      // захода на этом же телефоне — переспрашивать записанное незачем.
-      const known = await settings.all();
-      if (known.birthDate) {
-        dropStep('baby');
-        renderChrome();
-      }
-
-      if (remote && remote.birthDate) {
-        const who = remote.babyName ? `снимаем ${remote.babyName}` : 'настройки уже есть';
-        $('wiz-folder-text').textContent = state.remoteDays
-          ? `Папка не пустая: ${who}, накоплено дней — ${state.remoteDays}. ` +
-            'Они появятся в приложении, вводить ничего не нужно.'
-          : `Нашёл в папке настройки: ${who}. Вводить ничего не нужно.`;
-        return;
-      }
-
-      // Настроек нет — а причин у этого две, и лечатся они по-разному: файла
-      // в папке правда нет, или Google выдал доступ к самой папке, но не к
-      // тому, что внутри. Отличить их можно только заглянув внутрь, поэтому
-      // заглядываем и говорим, что увидели. Иначе человек, у которого папка
-      // полна снимков, видит пустой вопрос про имя и считает это поломкой.
-      let seen = null;
-      try { seen = (await drive.listChildren(root.id)).length; } catch { /* не пустили */ }
-
-      if (!root.ownedByMe && !seen) {
-        $('wiz-folder-text').textContent =
-          'Папка подключена, но внутрь неё приложение не видит: Google выдал ' +
-          'доступ к самой папке, а не к её содержимому.';
-        $('wiz-folder-hint').textContent =
-          'Выберите её заново кнопкой ниже — в окне Google не заходите внутрь ' +
-          'папки, а нажмите на неё один раз и сразу «Select». И проверьте, что ' +
-          'первый родитель дал вам права редактора, а не просмотра.';
-      } else if (state.remoteDays) {
-        $('wiz-folder-text').textContent =
-          `Папка не пустая: в ней уже ${state.remoteDays} дней. Они появятся в приложении. ` +
-          'Настроек (config.json) в ней нет — спрошу имя и дату и положу их туда.';
-      } else if (!root.ownedByMe) {
-        $('wiz-folder-text').textContent =
-          `Готово. Внутри папки приложение видит файлов: ${seen}, но настроек ` +
-          'среди них нет — спрошу имя и дату и запишу их в неё.';
-      } else if (found && root.ownedByMe) {
-        // Своя, пустая и найденная сама — чаще всего след прошлого захода. Если
-        // человек пришёл вторым, «Готово» здесь означало бы, что он начнёт
-        // снимать в собственный альбом рядом с общим и не заметит этого.
-        $('wiz-folder-text').textContent =
-          'Нашлась ваша собственная папка, и она пустая. Так и должно быть, ' +
-          'если альбом заводите вы.';
-        $('wiz-folder-hint').textContent =
-          'А если снимать уже начал второй родитель — подключитесь к его папке, ' +
-          'иначе вы будете снимать в разные альбомы. Папки подписаны почтой ' +
-          'владельца, так что свою и общую легко различить.';
-      }
-    }
-
-    /**
-     * Возвращает вторую кнопку в исходное, неподтверждённое состояние. Что она
-     * делает — зависит от того, лежит ли своя папка в Диске: если лежит,
-     * заводить ещё одну незачем, на неё можно просто переключиться.
-     */
-    function resetNewFolder() {
-      const b = $('wiz-folder-new');
-      delete b.dataset.sure;
-      b.textContent = state.ownRoot ? 'Переключиться на свою папку' : 'Завести свою папку';
-    }
-
-    /**
-     * Своя папка могла завестись раньше — на этом же телефоне или на другом.
-     * Тогда «Завести свою папку» не выбор, а ловушка: в Диске появляется
-     * второй альбом, и дальше человек снимает в него, а прошлые дни остаются
-     * в первом. Поэтому смотрим, есть ли своя папка помимо подключённой, и
-     * предлагаем переключиться на неё, а заводить — только когда её нет.
-     *
-     * @param {string} currentId папка, которая подключена прямо сейчас
-     */
-    async function findOwnRoot(currentId) {
-      state.ownRoot = null;
-      try {
-        const roots = await drive.listRoots();
-        state.ownRoot = roots.find(r => r.ownedByMe && r.id !== currentId) || null;
-      } catch { /* Диск не ответил — оставим кнопку как была */ }
-      resetNewFolder();
-      $('wiz-folder-new').title = state.ownRoot ? state.ownRoot.name : '';
-    }
-
-    /** Переключение на свою, уже существующую папку. Ничего не создаёт. */
-    async function switchToOwnFolder(button) {
-      const err = $('wiz-folder-error');
-      const own = state.ownRoot;
-      if (!own) return createOwnFolder(button);
-      err.textContent = '';
-      button.disabled = true;
-      try {
-        // Дни прежней папки к этой не относятся — кэш пересоберётся из неё.
-        await forgetAlbum();
-        await useFolder(own);
-        onToast(`Папка «${own.name}» подключена`);
-      } catch (e) {
-        err.textContent = e.message || 'Не удалось переключиться на свою папку';
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    /**
-     * Заведение собственной папки. Одно и то же и для «я первый», и для «эта
-     * папка не та, хочу свою», поэтому живёт одной функцией.
-     */
-    /**
-     * Что показать в карточке папки: сверху главная папка, под ней альбом.
-     *
-     * Главная — то, что человек ищет в Диске: она одна, подписана его почтой,
-     * и все дети лежат внутри. Альбом без неё выглядел бы как папка неизвестно
-     * где; она без альбома не отвечает на вопрос, на кого снимаем.
-     */
-    function showFolderCard(albumName) {
+    function showHome() {
       const home = state.homeName;
-      $('wiz-folder-name').textContent = home || albumName;
-      const sub = $('wiz-folder-sub');
-      sub.textContent = home ? `Альбом: ${albumName}` : '';
-      sub.classList.toggle('hidden', !home);
+      $('wiz-home-choice').classList.add('hidden');
+      $('wiz-home-ok').classList.remove('hidden');
+      $('wiz-home-name').textContent = home || state.folderName;
+      $('wiz-home-sub').textContent = home
+        ? 'Здесь лежат альбомы всех детей'
+        : 'Общая папка одного ребёнка';
+      $('wiz-home-text').textContent = home
+        ? 'Всё, что вы снимете, будет складываться сюда.'
+        : 'Вам открыли папку одного ребёнка — снимать будете в неё.';
+      $('wiz-home-other').classList.toggle('hidden', !pickerReady());
+      setNext('Дальше', true);
+    }
+
+    /** Запоминает главную папку — и в мастере, и в настройках. */
+    async function useHome(home, name) {
+      state.homeId = home.id;
+      state.homeName = name;
+      await settings.merge({ homeFolderId: home.id, homeFolderName: name });
     }
 
     /**
-     * Как назвать папку ребёнка. Спрашиваем до создания, а не после: папку
-     * человек потом ищет в Диске глазами, и «Малыш» среди прочих папок ему
-     * ничего не говорит. Имя тут же становится именем ребёнка — второй раз
-     * его на шаге «Про кого снимаем» не спрашивают.
-     *
-     * @returns {Promise<?string>} null — передумали, ничего не создаём
+     * Заведение главной папки. Альбом внутри неё заведут на следующем шаге:
+     * два вопроса на одном экране не помещаются, а порядок «где» → «кто»
+     * человеку понятнее обратного.
      */
-    function askFolderName() {
-      const box = $('wiz-newname');
-      const input = $('wiz-newname-input');
-      const birth = $('wiz-newname-birth');
-      const err = $('wiz-newname-error');
-      const wasChoice = !$('wiz-folder-choice').classList.contains('hidden');
-      const wasOk = !$('wiz-folder-ok').classList.contains('hidden');
-
-      $('wiz-folder-choice').classList.add('hidden');
-      $('wiz-folder-ok').classList.add('hidden');
-      box.classList.remove('hidden');
-      $('wiz-folder-text').textContent = 'Про кого снимаем?';
-      setNext(null);
+    async function createHome(button) {
+      const err = $('wiz-home-error');
       err.textContent = '';
-      settings.all().then(c => {
-        input.value = c.babyName || '';
-        birth.value = c.birthDate || D.todayKey();
-        input.focus();
-      });
-
-      return new Promise(resolve => {
-        const close = got => {
-          box.classList.add('hidden');
-          $('wiz-newname-ok').onclick = $('wiz-newname-cancel').onclick =
-            input.onkeydown = null;
-          $('wiz-folder-choice').classList.toggle('hidden', !wasChoice);
-          $('wiz-folder-ok').classList.toggle('hidden', !wasOk);
-          if (!got) restoreFolderText(wasOk);
-          resolve(got);
-        };
-        const take = () => {
-          const name = input.value.trim();
-          // Пустое имя — это безымянная папка в Диске, а пустая дата — счётчик
-          // дней, которому не от чего считать. Спрашиваем ещё раз.
-          if (!name) { err.textContent = 'Без имени папку не завести'; return input.focus(); }
-          if (!birth.value) { err.textContent = 'Поставьте дату — от неё считаются дни'; return birth.focus(); }
-          close({ name, birth: birth.value });
-        };
-        $('wiz-newname-ok').onclick = take;
-        $('wiz-newname-cancel').onclick = () => close(null);
-        input.onkeydown = e => { if (e.key === 'Enter') take(); };
-      });
-    }
-
-    /** Возврат к тому, что было написано над кнопками до вопроса про имя. */
-    function restoreFolderText(hadFolder) {
-      if (hadFolder) {
-        $('wiz-folder-text').textContent =
-          'Готово. Всё, что вы снимете, будет складываться сюда.';
-        setNext('Дальше', true);
-      } else {
-        askWhoYouAre();
-      }
-    }
-
-    async function createOwnFolder(button) {
-      const err = $('wiz-folder-error');
-      err.textContent = '';
-      const got = await askFolderName();
-      if (!got) return;
       button.disabled = true;
       try {
-        const cfg2 = await settings.all();
-        // Дом заводится вместе с первым альбомом: дом без альбомов бесполезен,
-        // а спрашивать про два уровня папок у человека, который просто хочет
-        // снимать, — значит рассказывать ему про наше устройство.
-        const found = await drive.findHome(cfg2.homeFolderId);
-        const home = found
-          || await drive.createHome(rootName(GOOGLE.folderName, cfg2.driveEmail));
-        const homeName = found ? await drive.nameHome(home, cfg2.driveEmail) : home.name;
-        state.homeName = homeName;
-        await settings.merge({ homeFolderId: home.id, homeFolderName: homeName });
-        const root = await drive.createRoot(got.name, home.id);
-        // Имя папки — оно же имя ребёнка, и дату уже спросили: шаг «Про кого
-        // снимаем» после этого не нужен, спрашивать второй раз то же самое —
-        // худшее, что может сделать мастер.
-        const future = D.diffDays(D.todayKey(), got.birth) > 0;
-        await settings.merge({
-          babyName: got.name,
-          birthDate: got.birth,
-          dueDate: future ? got.birth : null,
-        });
-        await useFolder(root);
-        dropStep('baby');
-        renderChrome();
-        onToast(`Папка «${root.name}» создана`);
+        const email = await settings.get('driveEmail');
+        const home = await drive.createHome(rootName(GOOGLE.folderName, email));
+        await useHome(home, home.name);
+        showHome();
+        onToast(`Папка «${home.name}» создана`);
       } catch (e) {
         err.textContent = e.message || 'Не удалось создать папку';
       } finally {
@@ -409,11 +196,12 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     }
 
     /**
-     * Подключение к чужой папке. Одно и то же и для «я второй», и для «это не
-     * та папка», поэтому живёт одной функцией.
+     * Подключение к чужой папке. Что именно выбрали — главную папку со всеми
+     * детьми или папку одного ребёнка, — решает содержимое: первому родителю
+     * проще поделиться домом целиком, но чаще делятся одним ребёнком.
      */
     async function connectToShared() {
-      const err = $('wiz-folder-error');
+      const err = $('wiz-home-error');
       err.textContent = '';
       try {
         const token = await G.getAccessToken({ interactive: true });
@@ -433,44 +221,188 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // остались бы снаружи. Имена там всегда числовые, это и ловим.
         if (/^\d{1,4}$/.test(folder.name.trim())) {
           err.textContent =
-            'Это папка года внутри альбома, а нужна папка альбома целиком — ' +
-            'та, что подписана почтой. В окне выбора вернитесь на шаг назад.';
+            'Это папка года внутри альбома, а нужна папка целиком — та, что ' +
+            'подписана именем ребёнка или почтой. Вернитесь на шаг назад.';
           return;
         }
-        // Что выбрали — дом со всеми детьми или папку одного ребёнка, —
-        // решает содержимое: первому родителю проще поделиться домом целиком,
-        // но чаще делятся одним ребёнком.
+
         const kind = await drive.folderKind(folder.id);
-        let album = { id: folder.id, name: folder.name, ownedByMe: false };
+        // Дни прежней папки к новой не относятся — кэш пересоберётся из неё.
+        await forgetAlbum();
         if (kind === 'home') {
           await drive.adoptHome(folder.id);
-          state.homeName = folder.name;
-          await settings.merge({ homeFolderId: folder.id, homeFolderName: folder.name });
-          const albums = await drive.listProjects(folder.id);
-          if (!albums.length) {
-            err.textContent =
-              `В папке «${folder.name}» нет ни одного альбома. Попросите ` +
-              'первого родителя дать доступ на папку ребёнка — она лежит ' +
-              'внутри этой.';
-            return;
-          }
-          // Метку на чужие папки ставим свою: без неё эти альбомы не попадут
-          // в список «Кого снимаем» — он собирается по меткам.
-          for (const a of albums) await drive.adoptRoot(a.id);
-          album = albums[0];
+          await useHome(folder, folder.name);
+          state.folderId = null;
+          state.folderName = '';
+          await settings.merge({ driveFolderId: null, driveFolderName: '' });
         } else {
           // Папка чужая, подпись на ней уже стоит — от владельца. Дома у неё
           // для нас нет: доступ дали на одного ребёнка, а не на всех.
           await drive.adoptRoot(folder.id);
+          state.homeId = null;
           state.homeName = '';
+          await settings.merge({ homeFolderId: null, homeFolderName: '' });
+          await chooseAlbum({ id: folder.id, name: folder.name, ownedByMe: false });
         }
-        // Дни прежней папки к этой не относятся — кэш пересоберётся из неё.
-        await forgetAlbum();
-        await useFolder(album);
-        onToast(`Папка «${album.name}» подключена`);
+        showHome();
+        onToast(`Папка «${folder.name}» подключена`);
       } catch (e) {
         err.textContent = e.message || 'Не удалось выбрать папку';
       }
+    }
+
+    // --- шаг «Кого снимаем» ----------------------------------------------
+
+    const TICK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.6 4.5L19 7.5" ' +
+      'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" ' +
+      'stroke-linejoin="round"/></svg>';
+
+    /**
+     * Список альбомов — по строчке на ребёнка. Собирается из Диска, а не из
+     * памяти телефона: альбом мог завестись на другом телефоне, и предлагать
+     * завести его второй раз нельзя.
+     */
+    async function renderAlbums() {
+      const list = $('wiz-albums');
+      const err = $('wiz-album-error');
+      err.textContent = '';
+      list.textContent = '';
+      $('wiz-album-text').textContent = 'Смотрю, какие альбомы есть…';
+      setNext(null);
+
+      let albums = [];
+      try {
+        albums = await drive.listRoots();
+      } catch (e) {
+        err.textContent = e.message || 'Диск не ответил — список не пришёл';
+        return;
+      }
+      state.albums = albums;
+
+      if (!albums.length) {
+        $('wiz-album-text').textContent =
+          'Ни одного альбома пока нет. Заведите первый — это папка ребёнка.';
+        return;
+      }
+
+      $('wiz-album-text').textContent = albums.length > 1
+        ? 'Выберите, кого снимаете. Переключаться между детьми можно и потом.'
+        : 'Вот кто уже заведён. Можно снимать его или завести ещё одного.';
+
+      for (const album of albums) {
+        const on = album.id === state.folderId;
+        const row = document.createElement('button');
+        row.className = 'album' + (on ? ' now' : '');
+        row.type = 'button';
+        row.setAttribute('aria-pressed', String(on));
+        row.title = album.name;
+
+        const text = document.createElement('span');
+        text.className = 'album-text';
+        const name = document.createElement('b');
+        name.textContent = String(album.name || '').split(' — ')[0].trim();
+        text.append(name);
+        if (!album.ownedByMe) {
+          const owner = (album.owners || [])[0];
+          const sub = document.createElement('span');
+          sub.className = 'album-sub';
+          sub.textContent = owner && owner.emailAddress
+            ? `общая папка ${owner.emailAddress}`
+            : 'общая папка';
+          text.append(sub);
+        }
+        row.append(text);
+
+        const tick = document.createElement('span');
+        tick.className = 'album-tick';
+        tick.innerHTML = on ? TICK : '';
+        row.append(tick);
+
+        row.onclick = () => pickAlbum(album, row);
+        list.append(row);
+      }
+
+      if (state.folderId) setNext('Дальше', true);
+    }
+
+    /** Тап по строчке: переключаемся и забираем из папки её настройки. */
+    async function pickAlbum(album, row) {
+      const err = $('wiz-album-error');
+      err.textContent = '';
+      if (album.id === state.folderId) return;
+      for (const b of $('wiz-albums').querySelectorAll('.album')) {
+        b.classList.remove('now');
+        b.setAttribute('aria-pressed', 'false');
+        b.querySelector('.album-tick').innerHTML = '';
+      }
+      row.classList.add('now');
+      row.setAttribute('aria-pressed', 'true');
+      row.querySelector('.album-tick').innerHTML = TICK;
+      try {
+        // Дни прежнего альбома к этому не относятся — кэш соберётся заново.
+        await forgetAlbum();
+        await chooseAlbum(album);
+        setNext('Дальше', true);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось открыть альбом';
+      }
+    }
+
+    /**
+     * Альбом выбран: запомнить и забрать из его папки настройки. Если имя и
+     * дата там уже лежат, шаг «Про кого снимаем» отпадает — второй родитель
+     * получает всё готовым и не вводит ничего.
+     */
+    async function chooseAlbum(album) {
+      state.folderId = album.id;
+      state.folderName = album.name;
+      await settings.merge({
+        driveFolderId: album.id,
+        driveFolderName: album.name,
+        babyName: '', birthDate: null, dueDate: null,
+      });
+
+      const files = await drive.listDayFiles(album.id);
+      state.remoteDays = countRemoteDays(files);
+      const remote = await fetchProfile(drive, files);
+      state.remoteProfile = Boolean(remote && remote.birthDate);
+      if (remote) {
+        const patch = {};
+        for (const key of PROFILE_KEYS) {
+          if (remote[key] !== undefined && remote[key] !== null) patch[key] = remote[key];
+        }
+        await settings.merge(patch);
+      }
+      state.creating = false;
+      if (state.remoteProfile) dropStep('baby'); else addStep('baby', 'album');
+      renderChrome();
+    }
+
+    /** «Завести альбом» — тот же вопрос про ребёнка, только папки ещё нет. */
+    function startNewAlbum() {
+      state.creating = true;
+      addStep('baby', 'album');
+      renderChrome();
+      next();
+    }
+
+    /**
+     * Заводит папку ребёнка. Зовётся с шага «Про кого снимаем»: имя и дата
+     * уже введены, и папка получает имя сразу — «Малыш», который потом
+     * переименуют, человек всё равно успел бы увидеть в Диске.
+     */
+    async function createAlbum(name) {
+      const home = state.homeId
+        || (await drive.findHome(await settings.get('homeFolderId')) || {}).id;
+      if (!home) throw new Error('Главная папка не найдена — вернитесь на шаг назад');
+      const root = await drive.createRoot(name, home);
+      state.folderId = root.id;
+      state.folderName = root.name;
+      state.remoteDays = 0;
+      state.remoteProfile = false;
+      state.creating = false;
+      await settings.merge({ driveFolderId: root.id, driveFolderName: root.name });
+      return root;
     }
 
     // --- что происходит при входе в каждый шаг ---------------------------
@@ -500,33 +432,36 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         setNext(has ? 'Дальше' : null);
       },
 
-      async folder() {
-        const err = $('wiz-folder-error');
+      async home() {
+        const err = $('wiz-home-error');
         err.textContent = '';
         state.reauth = false;
         setNext(null);
-        $('wiz-folder-ok').classList.add('hidden');
-        $('wiz-folder-choice').classList.add('hidden');
-        $('wiz-folder-text').textContent = 'Ищу папку в вашем Диске…';
+        $('wiz-home-ok').classList.add('hidden');
+        $('wiz-home-choice').classList.add('hidden');
+        $('wiz-home-text').textContent = 'Ищу папку в вашем Диске…';
 
         try {
-          // Дом ищем всегда, даже когда альбом уже известен: в нём лежит общий
-          // config.json, и без его id настройки уехали бы мимо.
           const cfg2 = await settings.all();
           const home = await drive.findHome(cfg2.homeFolderId);
           if (home) {
-            const name = await drive.nameHome(home, cfg2.driveEmail);
-            state.homeName = name;
-            await settings.merge({ homeFolderId: home.id, homeFolderName: name });
+            await useHome(home, await drive.nameHome(home, cfg2.driveEmail));
+            return showHome();
           }
+          // Дома нет, но альбом может быть: так живёт второй родитель,
+          // которому открыли папку одного ребёнка.
           const root = await drive.findRoot(state.folderId);
-          if (root) return await useFolder(root, { found: true });
+          if (root && !root.ownedByMe) {
+            state.folderId = root.id;
+            state.folderName = root.name;
+            return showHome();
+          }
           askWhoYouAre();
         } catch (e) {
           // Папку не нашли из-за сети — предлагать «завести» тут нельзя:
           // именно так рядом со старым альбомом и появляется второй.
           // Единственное честное действие — повторить попытку.
-          $('wiz-folder-text').textContent = 'Не удалось заглянуть в Диск.';
+          $('wiz-home-text').textContent = 'Не удалось заглянуть в Диск.';
           err.textContent = e.message || 'Google Диск не ответил';
           // Вход не приняли — «попробовать снова» упрётся в то же самое.
           // Окно Google открывается только по нажатию, поэтому возвращаем
@@ -536,12 +471,27 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         }
       },
 
+      async album() {
+        // Вернулись сюда кнопкой «назад» — значит, заводить передумали.
+        // Иначе «Дальше» с выбранным альбомом завело бы ещё один, такой же.
+        state.creating = false;
+        // Чужую папку одного ребёнка выбирать не из чего: она и есть альбом.
+        $('wiz-album-new').classList.toggle('hidden', !state.homeId);
+        await renderAlbums();
+      },
+
       async baby() {
         const c = await settings.all();
-        $('wiz-name').value = c.babyName || '';
-        $('wiz-birth').value = c.birthDate || D.todayKey();
+        const made = state.creating;
+        $('wiz-baby-title').textContent = made ? 'Новый альбом' : 'Про кого снимаем';
+        $('wiz-baby-text').textContent = made
+          ? `Папка с этим именем появится внутри «${state.homeName}».`
+          : '';
+        $('wiz-baby-text').classList.toggle('hidden', !made);
+        $('wiz-name').value = made ? '' : (c.babyName || '');
+        $('wiz-birth').value = made ? D.todayKey() : (c.birthDate || D.todayKey());
         $('wiz-baby-error').textContent = '';
-        setNext('Дальше');
+        setNext(made ? 'Завести альбом' : 'Дальше');
       },
 
       async install() {
@@ -575,26 +525,51 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     // --- переход вперёд: у некоторых шагов есть условия -------------------
     const leave = {
-      async folder() {
+      async home() {
+        return Boolean(state.homeId || state.folderId);
+      },
+
+      async album() {
         return Boolean(state.folderId);
       },
 
       async baby() {
+        const err = $('wiz-baby-error');
         const birth = $('wiz-birth').value;
-        if (!birth) {
-          $('wiz-baby-error').textContent = 'Поставьте дату — от неё считаются дни';
+        const name = $('wiz-name').value.trim();
+        if (!name) {
+          err.textContent = 'Имя нужно — им же называется папка';
           return false;
         }
-        const name = $('wiz-name').value.trim();
+        if (!birth) {
+          err.textContent = 'Поставьте дату — от неё считаются дни';
+          return false;
+        }
+
+        // Заводим папку прямо отсюда: имя и дата уже введены, и «Малыш»,
+        // которого потом переименуют, человек всё равно успел бы увидеть
+        // в Диске.
+        if (state.creating) {
+          err.textContent = '';
+          setNext('Завожу…', false);
+          try {
+            const root = await createAlbum(name);
+            onToast(`Альбом «${root.name}» заведён`);
+          } catch (e) {
+            err.textContent = e.message || 'Не удалось завести альбом';
+            setNext('Завести альбом', true);
+            return false;
+          }
+        }
+
         const future = D.diffDays(D.todayKey(), birth) > 0;
         await settings.merge({
           babyName: name,
           birthDate: birth,
           dueDate: future ? birth : null,
         });
-        // Папку заводили до того, как узнали имя, — теперь оно есть. Не вышло
-        // (нет сети, папка чужая) — не беда: имя ребёнка от имени папки
-        // не зависит, а переименовать её можно и руками в Диске.
+        // Имя ребёнка — оно же имя папки. Не вышло (нет сети, папка чужая) —
+        // не беда: переименовать её можно и руками в Диске.
         try {
           const got = await renameProject(drive, name);
           if (got) state.folderName = got;
@@ -610,12 +585,14 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       const step = steps[at];
       if (leave[step] && !(await leave[step]())) return;
       if (step === 'done') return finish();
-      if (step === 'folder' && state.reauth) {
+      // На шаге главной папки «Дальше» подменяется на «Войти заново» и
+      // «Попробовать снова»: вперёд оттуда идти не с чем.
+      if (step === 'home' && state.reauth) {
         state.reauth = false;
         state.signedIn = false;
         return show(steps.indexOf('signin'));
       }
-      if (step === 'folder' && !state.folderId) return enter.folder();
+      if (step === 'home' && !state.homeId && !state.folderId) return enter.home();
       next();
     };
 
@@ -648,27 +625,10 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       await enter.signin();
     };
 
-    $('wiz-folder-create').onclick = () => createOwnFolder($('wiz-folder-create'));
-
-    // Уйти из уже подключённой папки можно, но одним касанием — только пока
-    // уходить не от чего. Если в текущей папке уже лежат дни, они в ней и
-    // останутся, и человек должен это увидеть до того, как нажмёт.
-    $('wiz-folder-new').onclick = () => {
-      const b = $('wiz-folder-new');
-      if (state.remoteDays && !b.dataset.sure) {
-        b.dataset.sure = '1';
-        b.textContent = state.ownRoot ? 'Всё равно переключиться' : 'Всё равно завести новую';
-        $('wiz-folder-error').textContent =
-          `В текущей папке ${state.remoteDays} дней — они останутся в ней.`;
-        return;
-      }
-      const own = Boolean(state.ownRoot);
-      resetNewFolder();
-      return own ? switchToOwnFolder(b) : createOwnFolder(b);
-    };
-
-    $('wiz-pick-folder').onclick = connectToShared;
-    $('wiz-folder-other').onclick = connectToShared;
+    $('wiz-home-create').onclick = () => createHome($('wiz-home-create'));
+    $('wiz-home-pick').onclick = connectToShared;
+    $('wiz-home-other').onclick = connectToShared;
+    $('wiz-album-new').onclick = startNewAlbum;
 
     $('wiz-invite-share').onclick = async () => {
       const text = 'Ставь себе — сюда складываем по фото в день. ' +

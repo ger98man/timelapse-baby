@@ -161,60 +161,53 @@
           продолжите.</p>
       </section>
 
-      <!-- 3. Папка -->
-      <section class="step hidden" data-step="folder">
-        <h1 class="cover-title">Папка</h1>
-        <p id="wiz-folder-text" class="cover-sub">Ищу папку в вашем Диске…</p>
-        <div id="wiz-folder-ok" class="hidden">
-          <!-- Сверху — главная папка: она одна на человека, и по ней он найдёт
-               альбом в Диске. Под ней — сам альбом, то есть кто снимается. -->
+      <!-- 3. Главная папка: где вообще лежит альбом. Один вопрос на шаг —
+           иначе экран не помещается и вместо выбора получается простыня. -->
+      <section class="step hidden" data-step="home">
+        <h1 class="cover-title">Главная папка</h1>
+        <p id="wiz-home-text" class="cover-sub">Ищу папку в вашем Диске…</p>
+
+        <div id="wiz-home-ok" class="hidden">
           <div class="folder-card">
             <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 7.5a1 1 0 011-1h5l2 2h9a1 1 0 011 1V18a1 1 0 01-1 1H4a1 1 0 01-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
             <span class="folder-lines">
-              <span id="wiz-folder-name"></span>
-              <span id="wiz-folder-sub" class="folder-sub hidden"></span>
+              <span id="wiz-home-name"></span>
+              <span id="wiz-home-sub" class="folder-sub"></span>
             </span>
           </div>
-          <button id="wiz-folder-other" class="btn full hidden">Подключиться к другой папке</button>
-          <button id="wiz-folder-new" class="btn full">Завести свою папку</button>
-          <p class="hint" id="wiz-folder-hint">В Диске появится папка «Timelapse», в ней —
-            папка ребёнка, а внутри неё обычные папки по годам и месяцам с JPEG и
-            текстовыми файлами. Второй ребёнок — ещё одна папка рядом. Всё это можно
-            листать в приложении Google Диск, копировать и распечатывать без нашего кода.</p>
-        </div>
-        <!-- Имя спрашиваем до создания: папку в Диске человек потом ищет
-             глазами, и «Малыш» среди других папок ему ничего не говорит. -->
-        <div id="wiz-newname" class="hidden">
-          <label class="field">
-            <span>Имя ребёнка</span>
-            <input id="wiz-newname-input" type="text" placeholder="Например, Вика" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Дата рождения</span>
-            <input id="wiz-newname-birth" type="date">
-          </label>
-          <p id="wiz-newname-error" class="error"></p>
-          <button id="wiz-newname-ok" class="btn btn-primary full">Завести папку</button>
-          <button id="wiz-newname-cancel" class="btn btn-quiet full">Назад</button>
-          <p class="hint">Имя — это имя папки ребёнка в Диске; поменяете его в
-            настройках, папка переименуется следом. От даты считаются дни:
-            если она ещё впереди, приложение посчитает недели до родов.</p>
+          <button id="wiz-home-other" class="btn full hidden">Подключиться к другой корневой папке</button>
+          <p class="hint">Внутри — по папке на каждого ребёнка, а в них годы и
+            месяцы с обычными JPEG. Подключиться к другой стоит, если снимать
+            уже начал второй родитель и дал вам доступ к своей.</p>
         </div>
 
-        <div id="wiz-folder-choice" class="hidden">
-          <button id="wiz-folder-create" class="btn btn-primary full">Я первый — завести папку</button>
-          <button id="wiz-pick-folder" class="btn full">Я второй — подключиться к общей</button>
-          <p class="hint">Второму родителю: пусть первый откроет папку ребёнка в
-            Диске и даст вам доступ <b>на редактирование</b>. После этого выберите
-            её здесь — и вы будете снимать в один альбом. Можно дать доступ и на
-            всю папку «Timelapse» — тогда вам достанутся все дети сразу.</p>
+        <div id="wiz-home-choice" class="hidden">
+          <button id="wiz-home-create" class="btn btn-primary full">Я первый — завести папку</button>
+          <button id="wiz-home-pick" class="btn full">Я второй — подключиться к общей</button>
+          <p class="hint">Второму родителю: пусть первый даст вам доступ
+            <b>на редактирование</b> — на свою главную папку или на папку одного
+            ребёнка. Выберите её здесь, и вы будете снимать в один альбом.</p>
         </div>
-        <p id="wiz-folder-error" class="error"></p>
+
+        <p id="wiz-home-error" class="error"></p>
       </section>
 
-      <!-- 4. Ребёнок -->
+      <!-- 4. Кого снимаем: выбрать существующий альбом или завести новый. -->
+      <section class="step hidden" data-step="album">
+        <h1 class="cover-title">Кого снимаем</h1>
+        <p id="wiz-album-text" class="cover-sub">Смотрю, какие альбомы есть…</p>
+        <div id="wiz-albums" class="albums"></div>
+        <button id="wiz-album-new" class="btn full">Завести альбом</button>
+        <p class="hint">У каждого ребёнка своя папка со своим именем, датой
+          рождения и своими днями. Оформление и настройки видео общие на всех.</p>
+        <p id="wiz-album-error" class="error"></p>
+      </section>
+
+      <!-- 5. Ребёнок. Он же форма нового альбома: заводя папку, спрашиваем
+           ровно то же самое, и второй раз спрашивать нечего. -->
       <section class="step hidden" data-step="baby">
-        <h1 class="cover-title">Про кого снимаем</h1>
+        <h1 class="cover-title" id="wiz-baby-title">Про кого снимаем</h1>
+        <p id="wiz-baby-text" class="cover-sub hidden"></p>
         <label class="field">
           <span>Имя</span>
           <input id="wiz-name" type="text" placeholder="Имя" autocomplete="off">
