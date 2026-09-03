@@ -576,6 +576,30 @@ body.has-conn { --conn-h: 53px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---- Ожидание ----
+   Диск отвечает не мгновенно, и всё это время показывать нечего. Без крутилки
+   экран выглядит доделанным — а потом под руками сам собой появляется список
+   и кнопка, которых секунду назад не было. */
+.loading {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--muted); font-size: 14px; margin: 14px 0;
+}
+.loader {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin .9s linear infinite;
+}
+/* Пока читаем выбранный альбом, список не должен принимать новые нажатия:
+   второй тап уехал бы в тот же запрос и переключил бы не туда. Гасим плавно,
+   чтобы это читалось как «занят», а не как мигание. */
+.albums { transition: opacity .18s ease; }
+.albums.busy { opacity: .5; pointer-events: none; }
+
+/* Появление того, что дождались. Резкий прыжок кнопки под пальцем читается
+   как сбой; четверть секунды проявления — как ответ. */
+@keyframes fade-in { from { opacity: 0; transform: translateY(3px); } }
+.appear { animation: fade-in .22s ease both; }
+
 /* ---- Табы ---- */
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;

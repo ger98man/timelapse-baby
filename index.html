@@ -165,7 +165,8 @@
            иначе экран не помещается и вместо выбора получается простыня. -->
       <section class="step hidden" data-step="home">
         <h1 class="cover-title">Главная папка</h1>
-        <p id="wiz-home-text" class="cover-sub">Ищу папку в вашем Диске…</p>
+        <p id="wiz-home-text" class="cover-sub"></p>
+        <div id="wiz-home-wait" class="loading"><i class="loader"></i><span>Ищу папку в вашем Диске…</span></div>
 
         <div id="wiz-home-ok" class="hidden">
           <div class="folder-card">
@@ -195,9 +196,10 @@
       <!-- 4. Кого снимаем: выбрать существующий альбом или завести новый. -->
       <section class="step hidden" data-step="album">
         <h1 class="cover-title">Кого снимаем</h1>
-        <p id="wiz-album-text" class="cover-sub">Смотрю, какие альбомы есть…</p>
+        <p id="wiz-album-text" class="cover-sub"></p>
+        <div id="wiz-album-wait" class="loading"><i class="loader"></i><span>Смотрю, какие альбомы есть…</span></div>
         <div id="wiz-albums" class="albums"></div>
-        <button id="wiz-album-new" class="btn full">Завести альбом</button>
+        <button id="wiz-album-new" class="btn full hidden">Создать новый альбом</button>
         <p class="hint">У каждого ребёнка своя папка со своим именем, датой
           рождения и своими днями. Оформление и настройки видео общие на всех.</p>
         <p id="wiz-album-error" class="error"></p>
@@ -444,7 +446,8 @@
         <h2>Кого снимаем</h2>
         <div id="albums-list" class="albums"></div>
         <p id="albums-status" class="hint"></p>
-        <button id="btn-album-new" class="btn full">Завести альбом</button>
+        <div id="albums-wait" class="loading hidden"><i class="loader"></i><span>Смотрю, какие есть…</span></div>
+        <button id="btn-album-new" class="btn full">Создать новый альбом</button>
         <p class="hint">У каждого ребёнка своя папка, а в ней свои годы и месяцы,
           своё имя и дата рождения. Новый альбом заводится там же, где лежит
           текущий, — если это общая папка, второй родитель увидит обоих детей.

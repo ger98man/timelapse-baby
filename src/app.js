@@ -1963,12 +1963,23 @@ function renderThemeCard() {
 async function renderAlbumsCard() {
   const list = $('albums-list');
   const status = $('albums-status');
+  const wait = $('albums-wait');
   const add = $('btn-album-new');
   const say = (text, canAdd = false) => {
     list.textContent = '';
     status.textContent = text;
     status.classList.remove('hidden');
+    wait.classList.add('hidden');
     add.classList.toggle('hidden', !canAdd);
+  };
+  // Список едет из Диска, и до его приезда показывать нечего. Крутилка
+  // занимает то же место, что займут строчки, — тогда они не выпрыгивают
+  // из ниоткуда, а проявляются там, где человек уже ждёт.
+  const busy = () => {
+    list.textContent = '';
+    status.classList.add('hidden');
+    add.classList.add('hidden');
+    wait.classList.remove('hidden');
   };
 
   if (!configured() || !state.cfg.driveEmail) {
@@ -1984,20 +1995,24 @@ async function renderAlbumsCard() {
       : 'Нет сети — список альбомов покажу, когда связь появится.');
   }
 
-  say('Смотрю, какие есть…');
+  busy();
   let albums;
   try {
     albums = await drive().albumsFor(state.cfg.homeFolderId, state.cfg.driveFolderId);
   } catch (e) {
     return say(e.message || 'Диск не ответил — список альбомов не пришёл.');
   }
+  wait.classList.add('hidden');
 
   list.textContent = '';
   status.classList.add('hidden');
-  add.classList.remove('hidden');
+  add.classList.remove('hidden', 'appear');
+  void add.offsetWidth;                    // перезапуск анимации появления
+  add.classList.add('appear');
   if (!albums.length) {
     return say('Ни одного альбома пока нет.', true);
   }
+  list.classList.add('appear');
   // Один альбом — переключаться не с чем, но видеть, на кого снимаем, всё
   // равно нужно: строчка остаётся, а вот обещать выбор ей незачем.
   list.classList.toggle('single', albums.length === 1);
@@ -2194,7 +2209,14 @@ function transition(mutate) {
     mutate();
     return Promise.resolve();
   }
-  return document.startViewTransition(mutate).updateCallbackDone.catch(() => {});
+  const t = document.startViewTransition(mutate);
+  // Переход, прерванный следующим переходом, — обычное дело: человек нажал
+  // вторую вкладку, не дождавшись первой. Браузер отвергает все три обещания
+  // разом, и необработанное падает в консоль ошибкой, которой на самом деле
+  // нет. Ждём мы только подмену содержимого, остальные гасим молча.
+  t.ready.catch(() => {});
+  t.finished.catch(() => {});
+  return t.updateCallbackDone.catch(() => {});
 }
 
 /**

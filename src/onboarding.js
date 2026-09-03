@@ -119,6 +119,29 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     const next = () => show(at + 1);
 
+    /**
+     * Крутилка вместо содержимого, пока Диск отвечает.
+     *
+     * Без неё шаг выглядит доделанным — а через секунду под руками сам собой
+     * появляется список и кнопка, которых только что не было. Показать, что
+     * идёт ожидание, дешевле, чем потом объяснять этот прыжок.
+     *
+     * @param {string} id блок с крутилкой
+     * @param {?string} text что ждём; null — дождались, крутилку убрать
+     */
+    function waiting(id, text) {
+      const box = $(id);
+      if (text) box.querySelector('span').textContent = text;
+      box.classList.toggle('hidden', !text);
+    }
+
+    /** Плавное появление того, что дождались. */
+    function appear(el) {
+      el.classList.remove('hidden', 'appear');
+      void el.offsetWidth;                 // перезапуск анимации
+      el.classList.add('appear');
+    }
+
     // label = null — шага, на котором «Дальше» ничего не значит, кнопка не
     // должна изображать. Серая кнопка обещает действие, которого нет.
     function setNext(label, enabled = true) {
@@ -138,8 +161,9 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       $('wiz-home-text').textContent =
         'Папки пока нет. Если снимать начинаете вы — заведу её в вашем Диске. ' +
         'Если начал второй родитель — подключитесь к его папке.';
+      waiting('wiz-home-wait', null);
       $('wiz-home-ok').classList.add('hidden');
-      $('wiz-home-choice').classList.remove('hidden');
+      appear($('wiz-home-choice'));
       $('wiz-home-pick').classList.toggle('hidden', !pickerReady());
       setNext(null);
     }
@@ -153,8 +177,9 @@ export function runOnboarding({ onToast = () => {} } = {}) {
      */
     function showHome() {
       const home = state.homeName;
+      waiting('wiz-home-wait', null);
       $('wiz-home-choice').classList.add('hidden');
-      $('wiz-home-ok').classList.remove('hidden');
+      appear($('wiz-home-ok'));
       $('wiz-home-name').textContent = home || state.folderName;
       $('wiz-home-sub').textContent = home
         ? 'Здесь лежат альбомы всех детей'
@@ -269,19 +294,31 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     async function renderAlbums() {
       const list = $('wiz-albums');
       const err = $('wiz-album-error');
+      const add = $('wiz-album-new');
       err.textContent = '';
       list.textContent = '';
-      $('wiz-album-text').textContent = 'Смотрю, какие альбомы есть…';
+      $('wiz-album-text').textContent = '';
+      // Кнопку прячем вместе со списком: пока неизвестно, есть ли альбомы,
+      // неизвестно и что предлагать — выбрать или завести первого.
+      add.classList.add('hidden');
+      waiting('wiz-album-wait', 'Смотрю, какие альбомы есть…');
       setNext(null);
 
       let albums = [];
       try {
         albums = await drive.albumsFor(state.homeId, state.folderId);
       } catch (e) {
+        waiting('wiz-album-wait', null);
         err.textContent = e.message || 'Диск не ответил — список не пришёл';
         return;
       }
       state.albums = albums;
+      // Крутилку гасим не сразу: если следом сами выберем первого, она просто
+      // сменит надпись и будет крутиться дальше. Погасить и через мгновение
+      // зажечь снова — то самое мигание, ради которого её и заводили.
+      const autopick = !state.folderId && albums.length > 0;
+      if (!autopick) waiting('wiz-album-wait', null);
+      if (state.homeId) appear(add);
 
       if (!albums.length) {
         $('wiz-album-text').textContent =
@@ -326,12 +363,19 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         list.append(row);
       }
 
-      if (state.folderId) {
-        // Альбом мог быть выбран и раньше — на этом телефоне или на другом.
-        // Тогда переспрашивать про ребёнка тоже незачем.
-        await syncBabyStep();
-        setNext('Дальше', true);
+      // Ничего не выбрано — выбираем первого сами. Экран с единственным
+      // ребёнком и погашенной кнопкой «Дальше» выглядит как поломка: выбор
+      // вроде бы сделан, а идти дальше нельзя. Тап по строчке всё равно
+      // остаётся — переключиться на другого можно тут же.
+      if (autopick) {
+        await pickAlbum(albums[0], list.firstElementChild);
+        return;
       }
+
+      // Альбом мог быть выбран и раньше — на этом телефоне или на другом.
+      // Тогда переспрашивать про ребёнка тоже незачем.
+      await syncBabyStep();
+      setNext('Дальше', true);
     }
 
     /** Тап по строчке: переключаемся и забираем из папки её настройки. */
@@ -347,6 +391,11 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       row.classList.add('now');
       row.setAttribute('aria-pressed', 'true');
       row.querySelector('.album-tick').innerHTML = TICK;
+
+      // Настройки альбома лежат в его папке, и за ними идёт ещё один запрос.
+      // Пока он идёт, список занят: второй тап уехал бы в тот же запрос.
+      $('wiz-albums').classList.add('busy');
+      waiting('wiz-album-wait', 'Читаю настройки альбома…');
       try {
         // Дни прежнего альбома к этому не относятся — кэш соберётся заново.
         await forgetAlbum();
@@ -354,6 +403,9 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         setNext('Дальше', true);
       } catch (e) {
         err.textContent = e.message || 'Не удалось открыть альбом';
+      } finally {
+        $('wiz-albums').classList.remove('busy');
+        waiting('wiz-album-wait', null);
       }
     }
 
@@ -464,7 +516,8 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         setNext(null);
         $('wiz-home-ok').classList.add('hidden');
         $('wiz-home-choice').classList.add('hidden');
-        $('wiz-home-text').textContent = 'Ищу папку в вашем Диске…';
+        $('wiz-home-text').textContent = '';
+        waiting('wiz-home-wait', 'Ищу папку в вашем Диске…');
 
         try {
           const cfg2 = await settings.all();
@@ -486,6 +539,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           // Папку не нашли из-за сети — предлагать «завести» тут нельзя:
           // именно так рядом со старым альбомом и появляется второй.
           // Единственное честное действие — повторить попытку.
+          waiting('wiz-home-wait', null);
           $('wiz-home-text').textContent = 'Не удалось заглянуть в Диск.';
           err.textContent = e.message || 'Google Диск не ответил';
           // Вход не приняли — «попробовать снова» упрётся в то же самое.
@@ -500,8 +554,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // Вернулись сюда кнопкой «назад» — значит, заводить передумали.
         // Иначе «Дальше» с выбранным альбомом завело бы ещё один, такой же.
         state.creating = false;
-        // Чужую папку одного ребёнка выбирать не из чего: она и есть альбом.
-        $('wiz-album-new').classList.toggle('hidden', !state.homeId);
         await renderAlbums();
       },
 
