@@ -28,7 +28,14 @@ import { fakeDrive } from './fake-drive.js';
 // --- прогон -----------------------------------------------------------------
 run(async () => {
   await clearCache();
-  await settings.merge({ driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null });
+  // Начинаем с чистого листа: в браузере, где приложение уже запускали, в той
+  // же базе лежат его настоящие настройки — и дом из них увёл бы общий
+  // config.json в чужую папку прямо посреди проверок.
+  await settings.merge({
+    driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null,
+    homeFolderId: null, homeFolderName: 'Timelapse', baseFileId: null,
+    profileFileId: null, driveFolderName: '', theme: 'girl',
+  });
   const drive = fakeDrive();
 
   caseOf('Снимок уходит в папку, а не только в кэш');
