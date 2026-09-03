@@ -583,54 +583,127 @@ const PICKER_HINT =
  * появится свой пустой, он начнёт снимать туда и узнает об этом нескоро.
  * @returns {Promise<boolean>} появилась ли папка
  */
-async function askWhoYouAre() {
+/**
+ * Шлагбаум с папкой: показывает окно и ждёт, пока человек не решит.
+ *
+ * @param {{title, hint, create, pick, onCreate, onPick, escapable}} step
+ *        onCreate и onPick возвращают правду, когда вопрос закрыт.
+ * @returns {Promise<boolean>} решили или отмахнулись
+ */
+async function folderGate(step) {
   const box = $('folder-gate');
   const err = $('folder-gate-error');
   const create = $('folder-gate-create');
   const pick = $('folder-gate-pick');
+  const later = $('folder-gate-later');
+
+  $('folder-gate-title').textContent = step.title;
+  $('folder-gate-hint').textContent = step.hint;
+  create.textContent = step.create;
+  pick.textContent = step.pick;
   err.textContent = '';
   // Без Picker API выбрать чужую папку нечем — предлагать нечестно.
   pick.classList.toggle('hidden', !pickerReady());
+  later.classList.toggle('hidden', !step.escapable);
   box.classList.remove('hidden');
 
   const got = await new Promise(resolve => {
     const busy = on => { create.disabled = on; pick.disabled = on; };
-    create.onclick = async () => {
+    const run = fn => async () => {
       err.textContent = '';
       busy(true);
       try {
-        const root = await createFirstAlbum();
-        if (!root) return;                 // передумали — окно остаётся
-        toast(`Папка «${root.name}» создана`);
-        resolve(true);
+        if (await fn(t => { err.textContent = t; })) resolve(true);
       } catch (e) {
-        err.textContent = e.message || 'Не удалось создать папку';
+        err.textContent = e.message || 'Не получилось';
       } finally {
         busy(false);
       }
     };
-    pick.onclick = async () => {
-      err.textContent = '';
-      busy(true);
-      try {
-        const folder = await pickShared(t => { err.textContent = t; });
-        if (folder) {
-          toast(`Папка «${folder.name}» подключена`);
-          resolve(true);
-        }
-      } catch (e) {
-        err.textContent = e.message || 'Не удалось выбрать папку';
-      } finally {
-        busy(false);
-      }
-    };
-    $('folder-gate-later').onclick = () => resolve(false);
+    create.onclick = run(step.onCreate);
+    pick.onclick = run(step.onPick);
+    later.onclick = () => resolve(false);
   });
 
   box.classList.add('hidden');
-  create.onclick = pick.onclick = $('folder-gate-later').onclick = null;
+  create.onclick = pick.onclick = later.onclick = null;
   state.cfg = await settings.all();
   return got;
+}
+
+/**
+ * Корневая папка обязана быть. Без неё некуда складывать снимки и не из чего
+ * выбирать ребёнка, поэтому дальше этого окна приложение не пускает: либо
+ * заводим свою, либо выбираем в Диске существующую.
+ *
+ * Найденную запоминаем молча — спрашивать не о чем, ответ уже есть.
+ * @returns {Promise<boolean>} есть ли теперь корневая папка
+ */
+async function ensureHomeFolder() {
+  if (!configured() || !state.cfg.driveEmail) return false;
+  try {
+    const home = await drive().findHome(state.cfg.homeFolderId);
+    if (home) {
+      await useHome({ id: home.id, name: await drive().nameHome(home, state.cfg.driveEmail) });
+      return true;
+    }
+  } catch (e) {
+    // Диск не ответил — заводить папку вслепую нельзя: так рядом со старой
+    // появляется вторая. Показываем окно, там есть кнопка «попробовать ещё».
+    toast(e.message || 'Google Диск не ответил');
+  }
+
+  return folderGate({
+    title: 'Где будут лежать альбомы?',
+    hint: 'Корневая папка — одна на человека, внутри неё по папке на каждого ' +
+          'ребёнка. Заведу её в вашем Google Диске или подключусь к чужой, ' +
+          'если снимать уже начал второй родитель и дал вам доступ.',
+    create: 'Завести корневую папку',
+    pick: 'Выбрать корневую папку в Диске',
+    onCreate: async () => {
+      const id = await ensureOwnHome();
+      toast(`Папка «${state.cfg.homeFolderName}» создана`);
+      return Boolean(id);
+    },
+    onPick: async say => {
+      const folder = await pickShared(say);
+      if (!folder) return false;
+      // Выбрали папку ребёнка, а корневой над ней не видно — вопрос не закрыт:
+      // снимать в неё можно, но заводить следующего ребёнка некуда.
+      if (!state.cfg.homeFolderId) {
+        say(`«${folder.name}» — папка ребёнка, а корневой над ней не видно. ` +
+            'Снимать в неё уже можно, но корневую всё равно нужно завести — ' +
+            'в ней будут лежать ваши альбомы.');
+        return false;
+      }
+      toast(`Папка «${folder.name}» подключена`);
+      return true;
+    },
+  });
+}
+
+/** Альбома нет, а корневая уже есть: спрашиваем только про ребёнка. */
+async function askWhoYouAre() {
+  return folderGate({
+    title: 'Кого снимаем?',
+    hint: 'В корневой папке пока нет ни одного альбома. Заведу папку ребёнка ' +
+          'внутри неё — или подключусь к общей, если снимать уже начал второй ' +
+          'родитель.',
+    create: 'Создать альбом',
+    pick: 'Выбрать общую папку',
+    onCreate: async () => {
+      const root = await createFirstAlbum();
+      if (!root) return false;             // передумали — окно остаётся
+      toast(`Альбом «${root.name}» создан`);
+      return true;
+    },
+    onPick: async say => {
+      const folder = await pickShared(say);
+      if (!folder) return false;
+      toast(`Папка «${folder.name}» подключена`);
+      return true;
+    },
+  });
 }
 
 /**
@@ -857,12 +930,20 @@ async function pickShared(say = toast) {
   // Но новый может найтись сам: если доступ дали и на папку выше, это она и
   // есть, и вместе с ней видны остальные дети. Не видно — корневой у нас
   // просто нет, и врать про неё нельзя.
+  // Корневая для этой папки — та, что над ней, если её видно. Не видно —
+  // остаётся своя: корневая обязана быть, и стирать её, подключившись к
+  // чужому ребёнку, значит остаться вообще без места для своих детей.
   const above = await drive().parentHome(folder.id);
-  if (above) await drive().adoptHome(above.id);
-  await settings.merge({
-    homeFolderId: above ? above.id : null,
-    homeFolderName: above ? above.name : '',
-  });
+  if (above) {
+    await drive().adoptHome(above.id);
+    await settings.merge({ homeFolderId: above.id, homeFolderName: above.name });
+  } else {
+    const own = await drive().findHome(state.cfg.homeFolderId);
+    await settings.merge({
+      homeFolderId: own ? own.id : null,
+      homeFolderName: own ? own.name : '',
+    });
+  }
   // Дни прежней папки к этой не относятся: человек только что сказал,
   // какой альбом его, — остальное кэш, и он пересоберётся из папки.
   await store.switchProject(drive(), folder);
@@ -2846,6 +2927,20 @@ async function boot() {
   // Первым делом — связь с Google, и только потом приложение: человек должен
   // войти уже зная, уедет ли снятое сегодня в общую папку.
   await runGate();
+
+  // Корневая папка обязана быть до того, как человек попадёт на экраны:
+  // без неё некуда складывать снимки и не из чего выбирать ребёнка. Окно
+  // не отпускает, пока папка не заведена или не выбрана.
+  if (configured() && state.cfg.driveEmail && !state.cfg.homeFolderId) {
+    while (!(await ensureHomeFolder()) && !state.cfg.homeFolderId) {
+      // Диск мог не ответить: не пускаем дальше, но и не крутим окно вхолостую
+      // без сети — там кнопки просто не сработают, и человек это увидит.
+      if (!navigator.onLine) break;
+    }
+    // Корневая есть, а альбома в ней может не быть — спрашиваем сразу, а не
+    // при первой синхронизации: пустой экран «Сегодня» ничего не объясняет.
+    if (state.cfg.homeFolderId && !state.cfg.driveFolderId) await askWhoYouAre();
+  }
 
   const now = new Date();
   state.calYear = now.getFullYear();

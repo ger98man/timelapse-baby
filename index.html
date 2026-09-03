@@ -688,17 +688,17 @@
 <!-- Папок нет — надо понять, кто пришёл. Молча завести их нельзя: у второго
      родителя рядом с общим альбомом появится свой пустой, и он будет снимать
      не туда, ничего не подозревая. -->
+<!-- Шлагбаум: без корневой папки приложению некуда складывать снимки, и
+     пускать дальше нельзя. Заголовок и кнопки подписываются на ходу — спросить
+     надо либо про корневую папку, либо про альбом внутри неё. -->
 <div id="folder-gate" class="overlay hidden">
   <div class="ask-box">
-    <h2>Куда складывать снимки?</h2>
-    <p class="hint">Папок пока нет. Если альбом заводите вы — создам в вашем
-      Google Диске папку «Timelapse», а в ней папку ребёнка. Если снимать уже
-      начал второй родитель — выберите его папку, тогда оба будете снимать
-      в один альбом.</p>
+    <h2 id="folder-gate-title">Куда складывать снимки?</h2>
+    <p class="hint" id="folder-gate-hint"></p>
     <p id="folder-gate-error" class="error"></p>
-    <button id="folder-gate-create" class="btn btn-primary full">Я первый — завести папку</button>
-    <button id="folder-gate-pick" class="btn full">Я второй — выбрать общую папку</button>
-    <button id="folder-gate-later" class="btn btn-quiet full">Не сейчас</button>
+    <button id="folder-gate-create" class="btn btn-primary full">Завести корневую папку</button>
+    <button id="folder-gate-pick" class="btn full">Выбрать корневую папку в Диске</button>
+    <button id="folder-gate-later" class="btn btn-quiet full hidden">Не сейчас</button>
   </div>
 </div>
 

@@ -157,8 +157,8 @@ export function runOnboarding({ onToast = () => {} } = {}) {
      * у второго родителя от этого появляется собственный пустой альбом рядом
      * с общим, и дальше он снимает не туда, ничего не подозревая.
      */
-    function askWhoYouAre() {
-      $('wiz-home-text').textContent =
+    function askWhoYouAre(why = null) {
+      $('wiz-home-text').textContent = why ||
         'Папки пока нет. Если снимать начинаете вы — заведу её в вашем Диске. ' +
         'Если начал второй родитель — подключитесь к его папке.';
       waiting('wiz-home-wait', null);
@@ -180,17 +180,20 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       waiting('wiz-home-wait', null);
       $('wiz-home-choice').classList.add('hidden');
       appear($('wiz-home-ok'));
-      // В карточке — только корневая папка. Её может не быть, и тогда так и
-      // написано: подставлять на её место альбом нельзя, иначе человек ищет
-      // в Диске не то и делится не тем.
-      const album = String(state.folderName || '').split(' — ')[0].trim();
-      $('wiz-home-name').textContent = home || 'Корневой папки нет';
-      $('wiz-home-sub').textContent = home
-        ? 'Здесь лежат альбомы всех детей'
-        : `Вам открыли папку одного ребёнка — «${album}»`;
-      $('wiz-home-text').textContent = home
-        ? 'Всё, что вы снимете, будет складываться сюда.'
-        : 'Снимать будете в неё. Другие дети первого родителя вам не видны.';
+      // Корневая папка обязана быть: без неё некуда класть следующего ребёнка
+      // и не из чего выбирать. Нет — значит вопрос не закрыт, и вместо
+      // карточки снова стоят кнопки «завести» и «выбрать».
+      if (!home) {
+        const album = String(state.folderName || '').split(' — ')[0].trim();
+        askWhoYouAre(album
+          ? `Папка «${album}» подключена — снимать в неё уже можно. Но корневой ` +
+            'над ней не видно, а она нужна: в ней лежат ваши альбомы.'
+          : null);
+        return;
+      }
+      $('wiz-home-name').textContent = home;
+      $('wiz-home-sub').textContent = 'Здесь лежат альбомы всех детей';
+      $('wiz-home-text').textContent = 'Всё, что вы снимете, будет складываться сюда.';
       $('wiz-home-other').classList.toggle('hidden', !pickerReady());
       setNext('Дальше', true);
     }
@@ -537,14 +540,6 @@ export function runOnboarding({ onToast = () => {} } = {}) {
             await useHome(home, await drive.nameHome(home, cfg2.driveEmail));
             return showHome();
           }
-          // Дома нет, но альбом может быть: так живёт второй родитель,
-          // которому открыли папку одного ребёнка.
-          const root = await drive.findRoot(state.folderId);
-          if (root && !root.ownedByMe) {
-            state.folderId = root.id;
-            state.folderName = root.name;
-            return showHome();
-          }
           askWhoYouAre();
         } catch (e) {
           // Папку не нашли из-за сети — предлагать «завести» тут нельзя:
@@ -614,7 +609,9 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     // --- переход вперёд: у некоторых шагов есть условия -------------------
     const leave = {
       async home() {
-        return Boolean(state.homeId || state.folderId);
+        // Без корневой папки дальше нельзя: следующий шаг — выбор ребёнка
+        // внутри неё, и выбирать было бы не из чего.
+        return Boolean(state.homeId);
       },
 
       async album() {
@@ -689,7 +686,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         state.signedIn = false;
         return show(steps.indexOf('signin'));
       }
-      if (step === 'home' && !state.homeId && !state.folderId) return enter.home();
+      if (step === 'home' && !state.homeId) return enter.home();
       next();
     };
 
