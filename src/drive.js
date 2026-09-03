@@ -191,6 +191,42 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     ]), FOLDER_FIELDS);
   }
 
+  /**
+   * Корень самого Диска. Спрашиваем один раз за сессию: он нужен ровно чтобы
+   * не принять «Мой диск» за дом, когда альбом лежит прямо в нём.
+   */
+  let myDriveId = null;
+  async function driveRoot() {
+    if (!myDriveId) myDriveId = (await call(`${API}/files/root?fields=id`)).id;
+    return myDriveId;
+  }
+
+  /**
+   * Папка, в которой лежит альбом, — если в неё можно класть новые.
+   *
+   * Отсюда берётся дом для второго ребёнка: человек, переключившийся в общую
+   * папку, заводит его рядом с первым, а не отдельно у себя в Диске. Права
+   * спрашиваем у самого Диска (`canAddChildren`), а не гадаем по владельцу:
+   * общую папку могли дать и на просмотр.
+   *
+   * @returns {Promise<?{id:string,name:string}>} null — родителя не видно,
+   *          писать в него нельзя или это «Мой диск», а не дом.
+   */
+  async function parentHome(albumId) {
+    if (!albumId) return null;
+    try {
+      const album = await call(`${API}/files/${albumId}?fields=parents`);
+      const parentId = (album.parents || [])[0];
+      if (!parentId || parentId === await driveRoot()) return null;
+      const p = await call(`${API}/files/${parentId}` +
+        '?fields=id,name,ownedByMe,appProperties,capabilities(canAddChildren)');
+      if (!p.capabilities || !p.capabilities.canAddChildren) return null;
+      return p;
+    } catch {
+      return null;      // чужой корень, отозванный доступ, нет сети
+    }
+  }
+
   /** Год или месяц — обычная папка внутри альбома, а не альбом. */
   const isNumbered = name => /^\d{1,4}$/.test((name || '').trim());
 
@@ -547,7 +583,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   const adoptHome = folderId => mark(folderId, { [HOME]: '1' });
 
   return {
-    findRoot, findHome, listRoots, listHomes, listProjects,
+    findRoot, findHome, parentHome, listRoots, listHomes, listProjects,
     createRoot, createHome, nameHome, rename, folderKind, adoptRoot, adoptHome,
     folderForDay, putDayFile, updateProps,
     listDayFiles, listChildren, listTree, belongsToAlbum, download, trash, untrash,

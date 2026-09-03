@@ -448,6 +448,17 @@ async function checkConnection() {
   return setConn('ok', me.email || cfg.driveEmail, 'Подключен к Google');
 }
 
+/**
+ * Куда уходит снятое — «дом / альбом». Почту из имени дома выкидываем: она
+ * стоит рядом в той же полоске, и второй раз занимать ею полстроки незачем.
+ */
+function albumPath(cfg) {
+  const album = cfg.driveFolderName;
+  if (!album) return '';
+  const home = (cfg.homeFolderName || '').split(' — ')[0];
+  return cfg.homeFolderId && home ? `${home} / ${album}` : album;
+}
+
 function renderConn() {
   const bar = $('conn');
   const { status, email, note } = state.conn;
@@ -462,8 +473,16 @@ function renderConn() {
   $('conn-mark').className = 'conn-mark ' + (ok ? 'ok' : 'bad');
   $('conn-mark').innerHTML = ok ? ICON_OK : ICON_BAD;
   $('conn-email').textContent = email || 'Google не подключён';
-  $('conn-note').textContent = email ? '· ' + note : '';
-  bar.title = ok ? `${email} — снятое уезжает в папку` : note;
+
+  // Когда связь есть, «Подключен к Google» пересказывает зелёную галочку.
+  // Место дороже: детей и общих папок теперь несколько, и с любого экрана
+  // надо видеть, в чью папку и на кого уходит снимок, а не вспоминать.
+  const path = albumPath(state.cfg);
+  const tail = ok && path ? path : note;
+  $('conn-note').textContent = email ? '· ' + tail : '';
+  bar.title = ok
+    ? `${email} — снятое уезжает в «${path || 'папку'}»`
+    : note;
 
   // Без сети переподключаться некуда: окно Google просто не откроется.
   // Связь вернётся — полоска позеленеет сама, кнопка тут только мешала бы.
@@ -582,6 +601,18 @@ async function ensureAlbumFolder() {
   // Дом без единого альбома — то же самое, что и вовсе без папок: снимать
   // некуда. Спрашиваем, кто пришёл, — заведение дома там уже учтено.
   return root ? true : askWhoYouAre();
+}
+
+/**
+ * Запоминает дом, в котором мы теперь живём. Метку ставим и на чужой: она
+ * приватная, владельцу от неё ни холодно ни жарко, а нам по ней потом искать
+ * этот дом с другого телефона.
+ */
+async function useHome(home) {
+  await drive().adoptHome(home.id);
+  await settings.merge({ homeFolderId: home.id, homeFolderName: home.name });
+  state.cfg = await settings.all();
+  return home.id;
 }
 
 /**
@@ -1895,14 +1926,45 @@ async function useAlbum(album) {
 }
 
 /**
+ * Где заведётся новый альбом. Смотрим, но ничего не создаём: человек ещё не
+ * подтвердил, а дом, заведённый «на всякий случай», — лишняя папка в Диске.
+ *
+ * Первым делом спрашиваем, где лежит текущий альбом. Переключившийся в общую
+ * папку заводит второго ребёнка рядом с первым — чтобы оба родителя видели
+ * обоих детей, а не по одному у каждого. Своим домом отвечаем только когда
+ * рядом с текущим альбомом класть некуда: он лежит в чужом корне или доступ
+ * дали на просмотр.
+ *
+ * @returns {Promise<{id:?string, name:string}>} id null — дома ещё нет,
+ *          заведём с этим именем после подтверждения.
+ */
+async function plannedHome() {
+  const near = await drive().parentHome(state.cfg.driveFolderId);
+  if (near) return near;
+  const own = await drive().findHome(state.cfg.homeFolderId);
+  if (own) return own;
+  return { id: null, name: rootName(GOOGLE.folderName, state.cfg.driveEmail) };
+}
+
+/**
  * Новый альбом. Имя и дату спрашиваем сразу: без даты рождения приложение не
  * умеет считать дни, а альбом без имени — безымянная папка в Диске.
  */
 async function newAlbum() {
+  let home;
+  try {
+    home = await plannedHome();
+  } catch (e) {
+    return toast(e.message || 'Диск не ответил — не понять, куда класть альбом');
+  }
+
   const got = await ask({
     title: 'Новый альбом',
-    text: 'Так будет называться папка внутри «Timelapse». Оформление и ' +
-          'настройки видео перейдут из общих — вводить их заново не нужно.',
+    // Куда именно ляжет папка, человек должен знать до нажатия: у второго
+    // родителя это чужая общая папка, и разница между «рядом с первым
+    // ребёнком» и «отдельно у меня» — вся суть.
+    text: `Папка появится внутри «${home.name}»${home.id ? '' : ' — её заведу тут же'}. ` +
+          'Оформление и настройки видео перейдут из общих — вводить их заново не нужно.',
     inputs: [
       { key: 'name', label: 'Имя', type: 'text' },
       { key: 'birth', label: 'Дата рождения', type: 'date', value: D.todayKey() },
@@ -1916,7 +1978,7 @@ async function newAlbum() {
 
   progressOpen(`Завожу «${got.name}»`);
   try {
-    const homeId = await ensureOwnHome();
+    const homeId = home.id ? await useHome(home) : await ensureOwnHome();
     const root = await drive().createRoot(got.name, homeId);
     await store.switchProject(drive(), root);
     const future = D.diffDays(D.todayKey(), got.birth) > 0;

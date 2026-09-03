@@ -48,10 +48,17 @@ export async function pickFolder(accessToken) {
     .setMimeTypes('application/vnd.google-apps.folder')
     .setLabel(label);
 
+  // Размер задаём сами: по умолчанию окно рассчитано на монитор и на телефоне
+  // не помещается ни по ширине, ни по высоте. Google сам его не ужмёт —
+  // приложение обязано сказать, сколько места у него есть.
+  const w = Math.min(window.innerWidth - 16, 1050);
+  const h = Math.min(window.innerHeight - 16, 650);
+
   return new Promise(resolve => {
     new picker.PickerBuilder()
       .addView(folders('Доступные мне').setOwnedByMe(false))
       .addView(folders('Мой Диск').setOwnedByMe(true))
+      .setSize(w, h)
       .setAppId(appId())
       .setOAuthToken(accessToken)
       .setDeveloperKey(GOOGLE.apiKey)

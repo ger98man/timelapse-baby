@@ -464,6 +464,31 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 .card .btn:not(.btn-primary) { background: var(--surface-2); }
 .footer-note { color: var(--faint); font-size: 12px; text-align: center; margin: 26px 0 10px; }
 
+/* ---- Окно выбора папки Google ----
+
+   Окно рисует чужой код: он кладёт свои узлы в конец body и ставит их по
+   документу, а не по экрану. Со страницы, прокрученной вниз, окно оказывается
+   где-то вверху документа — и доскроллить до него нельзя, потому что подложка
+   растянута на всю высоту и держит палец.
+
+   Прибиваем и подложку, и само окно к экрану. Больше нам от их разметки
+   ничего не нужно: содержимое внутри — их iframe, и трогать его незачем. */
+.picker-dialog-bg {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important; height: 100% !important;
+  z-index: 60 !important;
+}
+.picker-dialog {
+  position: fixed !important;
+  top: 50% !important; left: 50% !important;
+  margin: 0 !important;
+  transform: translate(-50%, -50%);
+  max-width: calc(100vw - 16px) !important;
+  max-height: calc(100vh - 16px) !important;
+  z-index: 61 !important;
+}
+
 /* ---- Полоска связи с Google ---- */
 body.has-conn { --conn-h: 37px; }
 .conn {
