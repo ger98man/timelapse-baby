@@ -326,7 +326,12 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         list.append(row);
       }
 
-      if (state.folderId) setNext('Дальше', true);
+      if (state.folderId) {
+        // Альбом мог быть выбран и раньше — на этом телефоне или на другом.
+        // Тогда переспрашивать про ребёнка тоже незачем.
+        await syncBabyStep();
+        setNext('Дальше', true);
+      }
     }
 
     /** Тап по строчке: переключаемся и забираем из папки её настройки. */
@@ -377,8 +382,24 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         }
         await settings.merge(patch);
       }
+      // Настроек в папке нет — имя всё равно есть: так она и называется.
+      // Спрашивать имя ребёнка, стоя в папке с его именем, незачем.
+      if (!remote || !remote.babyName) {
+        await settings.set('babyName', String(album.name || '').split(' — ')[0].trim());
+      }
       state.creating = false;
-      if (state.remoteProfile) dropStep('baby'); else addStep('baby', 'album');
+      await syncBabyStep();
+    }
+
+    /**
+     * «Про кого снимаем» нужен ровно там, где даты рождения ещё нет: от неё
+     * считаются дни, без неё приложение не умеет ничего. Всё остальное —
+     * повтор вопроса, на который человек уже ответил: выбрав альбом, он
+     * выбрал и ребёнка вместе с его настройками.
+     */
+    async function syncBabyStep() {
+      if (await settings.get('birthDate')) dropStep('baby');
+      else addStep('baby', 'album');
       renderChrome();
     }
 
@@ -578,6 +599,15 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           const got = await renameProject(drive, name);
           if (got) state.folderName = got;
         } catch { /* Диск не ответил — папка останется как есть */ }
+
+        // Кладём config.json в папку сразу, а не в конце мастера. Иначе
+        // альбом, заведённый в мастере, до самого финиша ничего о себе не
+        // знает — и человек, вернувшийся выбрать его заново, слышит те же
+        // вопросы во второй раз.
+        try {
+          await pushProfile(drive);
+          state.remoteProfile = true;
+        } catch { /* нет сети — уедет из finish или при первой правке */ }
         return true;
       },
     };
