@@ -233,6 +233,73 @@ run(async () => {
   check('дата вернулась из папки', cfg.birthDate === '2026-09-01');
   check('лишних config.json нет', drive.count('config') === 1);
 
+  caseOf('У каждого ребёнка своя папка, общее — этажом выше');
+  // Раскладка Диска: Timelapse → Алиса, Марк → годы и месяцы. Проверяем ровно
+  // то, ради чего она такая: дни одного ребёнка не видны в альбоме другого,
+  // имя и дата у каждого свои, а оформление и настройки видео — общие, и
+  // новому альбому достаются сами собой.
+  const fam = fakeDrive();
+  await clearCache();
+  await settings.merge({
+    homeFolderId: null, baseFileId: null, profileFileId: null,
+    driveFolderId: null, driveFolderName: '',
+    babyName: '', birthDate: null, videoSize: 200, theme: 'girl',
+  });
+  const conf = root => [...fam.files.values()]
+    .find(f => !f.trashed && f.appProperties.kind === 'config' && f.root === root);
+  const json = async f => JSON.parse(await f.blob.text());
+
+  const home = await fam.createHome('Timelapse — mama@example.com');
+  await settings.merge({ homeFolderId: home.id });
+  const alice = await fam.createRoot('Алиса', home.id);
+  await store.switchProject(fam, alice);
+  await settings.merge({ babyName: 'Алиса', birthDate: '2026-01-02', theme: 'boy' });
+  await pushProfile(fam);
+  check('config.json теперь два: общий и детский', fam.count('config') === 2,
+    `config=${fam.count('config')}`);
+  const base = await json(conf(home.id));
+  const own = await json(conf(alice.id));
+  check('оформление ушло в общий', base.theme === 'boy' && base.videoSize === 200);
+  check('имени ребёнка в общем нет', base.babyName === undefined);
+  check('имя и дата ушли к ребёнку',
+    own.babyName === 'Алиса' && own.birthDate === '2026-01-02');
+  check('оформления в детском нет', own.theme === undefined);
+
+  await store.putPhoto(fam, '2026-09-10', await jpeg('#c96'));
+
+  const mark = await fam.createRoot('Марк', home.id);
+  await store.switchProject(fam, mark);
+  let two = await settings.all();
+  check('чужое имя в новом альбоме не осталось', !two.babyName,
+    JSON.stringify(two.babyName));
+  check('а оформление досталось из общего', two.theme === 'boy');
+  await settings.merge({ babyName: 'Марк', birthDate: '2026-05-05' });
+  await pushProfile(fam);
+  await store.refresh(fam);
+  check('дни Алисы в альбом Марка не попали',
+    (await entries.allDates()).length === 0,
+    `дней=${(await entries.allDates()).length}`);
+
+  await store.switchProject(fam, alice);
+  await store.refresh(fam);
+  two = await settings.all();
+  check('вернулись к Алисе — вернулись и дни',
+    (await entries.allDates()).join() === '2026-09-10');
+  check('и имя вернулось из её папки', two.babyName === 'Алиса',
+    JSON.stringify(two.babyName));
+
+  await store.renameProject(fam, 'Алиска');
+  check('папка поехала за именем', fam.folders.get(alice.id).name === 'Алиска');
+  check('в доме два альбома, а не четыре',
+    (await fam.listProjects(home.id)).length === 2);
+
+  await clearCache();
+  await settings.merge({
+    homeFolderId: null, baseFileId: null, profileFileId: null,
+    driveFolderId: 'root', driveFolderName: '', babyName: '', birthDate: null,
+    theme: 'girl',
+  });
+
   caseOf('Кадры для видео едут пачкой, а не по одному');
   // Год кадров, скачанных по одному, — это год ожиданий ответа подряд.
   // Пачка обязана быть шире одного и не шире, чем задумано: держать в памяти
@@ -274,7 +341,8 @@ run(async () => {
   await settings.merge({ eyeTarget: { lx: 0.375, ly: 0.42, rx: 0.625, ry: 0.42 } });
 
   await clearCache();
-  await settings.merge({ babyName: '', birthDate: null, driveFolderId: null, profileFileId: null });
+  await settings.merge({ babyName: '', birthDate: null, driveFolderId: null,
+                         profileFileId: null, homeFolderId: null, baseFileId: null });
 });
 </script>
 </body>

@@ -15,6 +15,10 @@
  */
 export function fakeDrive({ latency = 0 } = {}) {
   const files = new Map();
+  // Папки заглушка держит отдельно от файлов и ровно в той же раскладке, что
+  // и Диск: дом → альбомы → годы. Тесту, который про дни, они не мешают —
+  // пока папок не завели, всё лежит в одной, как раньше.
+  const folders = new Map();
   const downloads = [];      // что и сколько раз качали — главное в этих тестах
   let drive;
   let seq = 0, sums = 0;
@@ -25,19 +29,68 @@ export function fakeDrive({ latency = 0 } = {}) {
   let inFlight = 0, maxInFlight = 0;
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
+  // Пока папок не заводили, у файлов нет и родителя — такой файл виден
+  // отовсюду, иначе тесты про дни пришлось бы переписывать все разом.
+  const inRoot = (f, rootId) => !rootId || f.root === undefined || f.root === rootId;
+
   drive = {
     files,
     downloads,
     latency,
+    folders,
     async findRoot(known) {
-      return { id: known || 'root', name: 'TimelapseBaby', ownedByMe: true,
+      if (known && folders.has(known)) return folders.get(known);
+      const own = [...folders.values()].filter(f => f.kind === 'album');
+      if (own.length) return own[0];
+      // Папок не заводили — значит, тест про дни, и папка ровно одна.
+      return { id: known || 'root', name: 'Альбом', ownedByMe: true,
                appProperties: { everydayNamed: '1' } };
     },
-    async nameRoot(root) { return root.name; },
+    async findHome(known) {
+      if (known && folders.has(known)) return folders.get(known);
+      return [...folders.values()].find(f => f.kind === 'home') || null;
+    },
+    async createHome(name) {
+      const id = 'h' + (++seq);
+      const home = { id, name, kind: 'home', parent: null, ownedByMe: true,
+                     appProperties: { everydayHome: '1', everydayNamed: '1' } };
+      folders.set(id, home);
+      return home;
+    },
+    async createRoot(name, parent = null) {
+      const id = 'a' + (++seq);
+      const album = { id, name, kind: 'album', parent, ownedByMe: true,
+                      appProperties: { everydayRoot: '1' } };
+      folders.set(id, album);
+      return album;
+    },
+    async listRoots() {
+      return [...folders.values()].filter(f => f.kind === 'album');
+    },
+    async listHomes() {
+      return [...folders.values()].filter(f => f.kind === 'home');
+    },
+    async listProjects(homeId) {
+      return [...folders.values()].filter(f => f.kind === 'album' && f.parent === homeId);
+    },
+    async rename(id, name) {
+      const f = folders.get(id);
+      if (f) f.name = name;
+      return name;
+    },
+    async folderKind(id) {
+      const f = folders.get(id);
+      return f ? f.kind : 'album';
+    },
+    async nameHome(home) { return home.name; },
     async adoptRoot(id) { return id; },
-    async putDayFile({ dateKey, name, blob, kind, fileId, props }) {
+    async adoptHome(id) { return id; },
+    async putDayFile({ rootId, dateKey, name, blob, kind, fileId, props }) {
       const id = fileId || 'f' + (++seq);
       const prev = files.get(id);
+      // В какой папке лежит файл — то же, что parents в Диске. Без этого
+      // общий config.json дома и детский были бы неразличимы.
+      const root = rootId || (prev ? prev.root : undefined);
       const appProperties = {
         ...(prev ? prev.appProperties : {}),
         everyday: '1', kind, ...(props || {}),
@@ -46,7 +99,7 @@ export function fakeDrive({ latency = 0 } = {}) {
       const modifiedTime = tick();
       // Диск считает контрольную сумму содержимого; правка метаданных её не меняет
       const md5Checksum = 'md5-' + (++sums);
-      files.set(id, { id, name, blob, modifiedTime, md5Checksum, appProperties });
+      files.set(id, { id, name, blob, root, modifiedTime, md5Checksum, appProperties });
       return { id, modifiedTime, md5Checksum };
     },
     async updateProps(id, props) {
@@ -57,13 +110,13 @@ export function fakeDrive({ latency = 0 } = {}) {
     },
     // Содержимое папки: приложение так добирается до config.json, когда на нём
     // нет метки — например, в общей папке второго родителя.
-    async listChildren() {
-      return [...files.values()].filter(f => !f.trashed);
+    async listChildren(rootId) {
+      return [...files.values()].filter(f => !f.trashed && inRoot(f, rootId));
     },
     listCalls: 0,
-    async listDayFiles() {
+    async listDayFiles(rootId) {
       drive.listCalls++;
-      return [...files.values()].filter(f => !f.trashed).map(f => ({
+      return [...files.values()].filter(f => !f.trashed && inRoot(f, rootId)).map(f => ({
         ...f,
         appProperties: { ...f.appProperties },
         // Google отдаёт ссылку на готовую миниатюру прямо в описи

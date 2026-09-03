@@ -28,9 +28,25 @@ export function describeFile(f) {
 export const TAG = 'everyday';
 
 /**
- * Имя папки подписываем почтой владельца. Без этого у второго родителя в окне
- * выбора оказываются две строчки «TimelapseBaby» — своя и общая, — и понять,
+ * Две метки на папках, потому что уровня теперь два.
+ *
+ *   HOME — дом: одна папка на человека, внутри неё лежат все альбомы и общий
+ *          config.json с оформлением и настройками видео;
+ *   ROOT — альбом: папка одного ребёнка, внутри неё свой config.json и годы.
+ *
+ * Всё, что ниже альбома, разметки не имеет: годы и месяцы — обычные папки,
+ * их находят по имени и по родителю.
+ */
+const HOME = `${TAG}Home`;
+const ROOT = `${TAG}Root`;
+
+/**
+ * Имя дома подписываем почтой владельца. Без этого у второго родителя в окне
+ * выбора оказываются две строчки «Timelapse» — своя и общая, — и понять,
  * какую подключать, нельзя. Почта же видна и в Диске, и в списке доступов.
+ *
+ * Альбомы внутри дома так не подписывают: их имя — имя ребёнка, и почта в нём
+ * только мешала бы.
  */
 export const rootName = (base, email) => (email ? `${base} — ${email}` : base);
 
@@ -124,60 +140,161 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     });
   }
 
+  const FOLDER_FIELDS = 'files(id,name,ownedByMe,parents,appProperties),nextPageToken';
+
   /**
-   * Папка приложения, если она есть. Ничего не создаёт — и это главное:
-   * альбом заводит человек, а не побочный эффект запуска. Папка, созданная
-   * молча, — это второй альбом у того, кто хотел подключиться к общему,
-   * и вторая одинаковая строчка в окне выбора у второго родителя.
+   * Папка альбома, если она есть. Ничего не создаёт — и это главное: альбом
+   * заводит человек, а не побочный эффект запуска. Папка, созданная молча, —
+   * это второй альбом у того, кто хотел подключиться к общему, и вторая
+   * одинаковая строчка в окне выбора у второго родителя.
    */
   async function findRoot(knownId) {
-    const fields = 'id,name,trashed,ownedByMe,appProperties';
+    return findMarked(knownId, listRoots);
+  }
+
+  /** Дом со всеми альбомами. Как и альбом, сам собой не заводится. */
+  async function findHome(knownId) {
+    return findMarked(knownId, listHomes);
+  }
+
+  async function findMarked(knownId, listAll) {
+    const fields = 'id,name,trashed,ownedByMe,parents,appProperties';
     if (knownId) {
       try {
         const f = await call(`${API}/files/${knownId}?fields=${fields}`);
         if (!f.trashed) return f;
       } catch { /* удалили или отобрали доступ — поищем по метке */ }
     }
-    const found = await listRoots();
+    const found = await listAll();
     return found[0] || null;
   }
 
   /**
-   * Все папки альбома, помеченные приложением: и своя, и те, к которым
-   * подключились. Нужны, чтобы не предлагать завести вторую свою, когда
-   * первая уже лежит в Диске.
+   * Все папки альбомов, помеченные приложением: и свои, лежащие в доме, и
+   * чужие, к которым подключились. Это и есть список, из которого человек
+   * выбирает, кого он сейчас снимает.
    */
   async function listRoots() {
     return list(q([
-      `appProperties has { key='${TAG}Root' and value='1' }`,
+      `appProperties has { key='${ROOT}' and value='1' }`,
       `mimeType='${FOLDER_MIME}'`,
       'trashed=false',
-    ]), 'files(id,name,ownedByMe,appProperties),nextPageToken');
+    ]), FOLDER_FIELDS);
   }
 
-  /** Заводит папку альбома. Вызывается только по явному решению человека. */
-  async function createRoot(name) {
-    return createFolder(name, null, { [`${TAG}Root`]: '1', [`${TAG}Named`]: '1' });
+  /** Дома, помеченные приложением. Свой должен быть один. */
+  async function listHomes() {
+    return list(q([
+      `appProperties has { key='${HOME}' and value='1' }`,
+      `mimeType='${FOLDER_MIME}'`,
+      'trashed=false',
+    ]), FOLDER_FIELDS);
+  }
+
+  /** Год или месяц — обычная папка внутри альбома, а не альбом. */
+  const isNumbered = name => /^\d{1,4}$/.test((name || '').trim());
+
+  /** Папки внутри папки — один запрос, без файлов. */
+  async function subFolders(parentId) {
+    if (!parentId) return [];
+    return list(q([
+      `'${parentId}' in parents`,
+      `mimeType='${FOLDER_MIME}'`,
+      'trashed=false',
+    ]), FOLDER_FIELDS);
   }
 
   /**
-   * Дописывает почту к имени своей папки. Только своей: общую, заведённую
-   * первым родителем, переименовывать нельзя — она у него на виду.
+   * Альбомы внутри дома.
+   *
+   * Метка — вещь приватная: свою Google показывает только тому, кто её
+   * поставил. В чужом доме, к которому дали доступ, помеченных папок не видно
+   * ни одной, и запрос по метке вернул бы «детей нет» при полном доме.
+   * Поэтому метка — только предпочтение, а не условие: нет помеченных —
+   * берём все папки, кроме годов.
+   */
+  async function listProjects(homeId) {
+    const inside = await subFolders(homeId);
+    const marked = inside.filter(f => f.appProperties && f.appProperties[ROOT]);
+    return marked.length ? marked : inside.filter(f => !isNumbered(f.name));
+  }
+
+  /** Заводит дом. Вызывается только по явному решению человека. */
+  async function createHome(name) {
+    return createFolder(name, null, { [HOME]: '1', [`${TAG}Named`]: '1' });
+  }
+
+  /** Заводит альбом внутри дома. Тоже только по явному решению человека. */
+  async function createRoot(name, homeId) {
+    return createFolder(name, homeId || null, { [ROOT]: '1' });
+  }
+
+  /**
+   * Дописывает почту к имени своего дома. Только своего: чужой, заведённый
+   * первым родителем, переименовывать нельзя — он у него на виду.
    *
    * Отметка в метаданных нужна, чтобы сделать это ровно один раз. Иначе
    * человек, переименовавший папку по-своему, спорил бы с приложением
    * при каждой синхронизации.
    */
-  async function nameRoot(root, email) {
-    if (!email || !root.ownedByMe) return root.name;
-    if (root.appProperties && root.appProperties[`${TAG}Named`]) return root.name;
-    const name = rootName(root.name, email);
-    await call(`${API}/files/${root.id}?fields=id,name`, {
+  async function nameHome(home, email) {
+    if (!email || !home.ownedByMe) return home.name;
+    if (home.appProperties && home.appProperties[`${TAG}Named`]) return home.name;
+    const name = rootName(home.name, email);
+    await rename(home.id, name, { [`${TAG}Named`]: '1' });
+    return name;
+  }
+
+  /**
+   * Переименование папки. Нужно альбому: его имя — имя ребёнка, а имя правят
+   * в настройках, и папка в Диске должна поехать следом. Чужие папки не
+   * трогаем — они на виду у владельца, и переименовывать их не наше дело.
+   */
+  async function rename(fileId, name, appProperties) {
+    const body = appProperties ? { name, appProperties } : { name };
+    const f = await call(`${API}/files/${fileId}?fields=id,name`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, appProperties: { [`${TAG}Named`]: '1' } }),
+      body: JSON.stringify(body),
     });
-    return name;
+    return f.name;
+  }
+
+  /**
+   * Что за папку выбрали в окне Google: дом со всеми альбомами или альбом
+   * одного ребёнка. Спрашивают об этом ровно один раз — когда второй родитель
+   * подключается к общей папке, и от ответа зависит, покажем ли мы ему список
+   * детей или сразу один альбом.
+   *
+   * Сначала смотрим метки, потом — что лежит внутри: у первого родителя метки
+   * стоят, но Google показывает их только тому, кому выдан доступ к самой
+   * папке, а не к её содержимому. Годы внутри — верный признак альбома,
+   * помеченные папки внутри — верный признак дома.
+   */
+  async function folderKind(folderId) {
+    let props = {};
+    try {
+      const f = await call(`${API}/files/${folderId}?fields=appProperties`);
+      props = f.appProperties || {};
+    } catch { /* метаданные не показали — решим по содержимому */ }
+    if (props[HOME]) return 'home';
+    if (props[ROOT]) return 'album';
+
+    const inside = await subFolders(folderId);
+    if (inside.some(f => f.appProperties && f.appProperties[ROOT])) return 'home';
+    if (inside.some(f => isNumbered(f.name))) return 'album';
+    if (!inside.length) return 'album';
+
+    // Меток не видно, годов внутри тоже нет — значит, это либо дом с детьми,
+    // либо ещё пустой альбом. Различить их можно на этаж ниже: годы у ребёнка
+    // и означают дом. Ошибка здесь дорогая — приняв дом за альбом, приложение
+    // сложило бы снимки прямо в него, рядом с папками детей.
+    const deeper = await list(q([
+      inAny(inside.map(f => f.id)),
+      `mimeType='${FOLDER_MIME}'`,
+      'trashed=false',
+    ]), FOLDER_FIELDS);
+    return deeper.some(f => isNumbered(f.name)) ? 'home' : 'album';
   }
 
   async function ensureChildFolder(name, parentId) {
@@ -404,18 +521,35 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return out;
   }
 
-  /** Помечает выбранную через окно Google папку как корневую для приложения. */
-  async function adoptRoot(folderId) {
-    await call(`${API}/files/${folderId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appProperties: { [`${TAG}Root`]: '1' } }),
-    });
+  /**
+   * Помечает выбранную через окно Google папку.
+   *
+   * Метку ставим и на чужую: она приватная, видит её только тот, кто её
+   * поставил, — владельцу папки от этого ни холодно ни жарко, а нам по ней
+   * потом собирать список альбомов.
+   */
+  async function mark(folderId, props) {
+    try {
+      await call(`${API}/files/${folderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appProperties: props }),
+      });
+    } catch (e) {
+      // Доступ на чтение — пометить нельзя, но смотреть можно. Падать тут
+      // нельзя: человек выбрал папку, и она обязана открыться.
+      if (!/^Google Диск: 40[34]/.test(e.message || '')) throw e;
+    }
     return folderId;
   }
 
+  const adoptRoot = folderId => mark(folderId, { [ROOT]: '1' });
+  const adoptHome = folderId => mark(folderId, { [HOME]: '1' });
+
   return {
-    findRoot, listRoots, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
+    findRoot, findHome, listRoots, listHomes, listProjects,
+    createRoot, createHome, nameHome, rename, folderKind, adoptRoot, adoptHome,
+    folderForDay, putDayFile, updateProps,
     listDayFiles, listChildren, listTree, belongsToAlbum, download, trash, untrash,
     folderLink, usage,
   };

@@ -74,8 +74,14 @@ function toast(text, ms = 2600, action = null) {
  * Системный ненадёжен: встроенные панели браузеров гасят его молча, а Chrome
  * после «блокировать диалоги на этой странице» навсегда возвращает «нет» —
  * и кнопка выглядит сломанной, хотя код отработал.
+ *
+ * @param {{inputs?:Array<{key:string,label:string,type?:string,value?:string}>}} opts
+ *        inputs — диалог не подтверждает, а спрашивает: тогда «да» приносит
+ *        объект с ответами, а не true. Отмена всегда false, чтобы у зовущего
+ *        была одна проверка на оба случая.
  */
-function ask({ title, text = '', items = [], yes = 'Удалить', no = 'Отмена', danger = true }) {
+function ask({ title, text = '', items = [], inputs = [],
+               yes = 'Удалить', no = 'Отмена', danger = true }) {
   return new Promise(resolve => {
     const box = $('ask');
     $('ask-title').textContent = title;
@@ -95,6 +101,24 @@ function ask({ title, text = '', items = [], yes = 'Удалить', no = 'От�
       list.append(li);
     }
     list.classList.toggle('hidden', !items.length);
+
+    const fields = $('ask-fields');
+    fields.textContent = '';
+    const boxes = new Map();
+    for (const f of inputs) {
+      const label = document.createElement('label');
+      label.className = 'field';
+      const span = document.createElement('span');
+      span.textContent = f.label;
+      const input = document.createElement('input');
+      input.type = f.type || 'text';
+      input.value = f.value || '';
+      label.append(span, input);
+      fields.append(label);
+      boxes.set(f.key, input);
+    }
+    fields.classList.toggle('hidden', !inputs.length);
+
     $('ask-yes').textContent = yes;
     $('ask-yes').classList.toggle('btn-danger', danger);
     $('ask-yes').classList.toggle('btn-primary', !danger);
@@ -106,9 +130,15 @@ function ask({ title, text = '', items = [], yes = 'Удалить', no = 'От�
       $('ask-yes').onclick = $('ask-no').onclick = box.onclick = null;
       resolve(answer);
     };
-    $('ask-yes').onclick = () => close(true);
+    const answers = () => {
+      const out = {};
+      for (const [key, input] of boxes) out[key] = input.value.trim();
+      return out;
+    };
+    $('ask-yes').onclick = () => close(inputs.length ? answers() : true);
     $('ask-no').onclick = () => close(false);
     box.onclick = e => { if (e.target === box) close(false); };
+    if (inputs.length) boxes.values().next().value.focus();
   });
 }
 
@@ -481,8 +511,7 @@ async function askWhoYouAre() {
       err.textContent = '';
       busy(true);
       try {
-        const root = await drive().createRoot(rootName(GOOGLE.folderName, state.cfg.driveEmail));
-        await settings.merge({ driveFolderId: root.id, driveFolderName: root.name });
+        const root = await createFirstAlbum();
         toast(`Папка «${root.name}» создана`);
         resolve(true);
       } catch (e) {
@@ -495,17 +524,11 @@ async function askWhoYouAre() {
       err.textContent = '';
       busy(true);
       try {
-        const token = await G.getAccessToken({ interactive: true });
-        const folder = await pickFolder(token);
-        if (!folder) { err.textContent = PICKER_HINT; return; }
-        if (yearFolder(folder.name)) { err.textContent = YEAR_FOLDER; return; }
-        await drive().adoptRoot(folder.id);
-        // Дни прежней папки к этой не относятся: человек только что сказал,
-        // какой альбом его, — остальное кэш, и он пересоберётся из папки.
-        await store.forgetAlbum();
-        await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
-        toast(`Папка «${folder.name}» подключена`);
-        resolve(true);
+        const folder = await pickShared(t => { err.textContent = t; });
+        if (folder) {
+          toast(`Папка «${folder.name}» подключена`);
+          resolve(true);
+        }
       } catch (e) {
         err.textContent = e.message || 'Не удалось выбрать папку';
       } finally {
@@ -529,8 +552,11 @@ async function askWhoYouAre() {
  */
 async function ensureAlbumFolder() {
   if (!configured() || !state.cfg.driveEmail) return false;
-  let root;
+  let home, root;
   try {
+    // Дом и альбом ищем вместе: у второго родителя дома нет вовсе, а у
+    // первого альбом лежит внутри дома, и знать надо про оба.
+    home = await drive().findHome(state.cfg.homeFolderId);
     root = await drive().findRoot(state.cfg.driveFolderId);
   } catch (e) {
     // Не дозвонились до Диска — предлагать «завести папку» тут нельзя:
@@ -538,17 +564,94 @@ async function ensureAlbumFolder() {
     toast(e.message || 'Google Диск не ответил');
     return false;
   }
-  if (!root) return askWhoYouAre();
 
-  const name = await drive().nameRoot(root, state.cfg.driveEmail);
   const patch = {};
-  if (root.id !== state.cfg.driveFolderId) patch.driveFolderId = root.id;
-  if (name !== state.cfg.driveFolderName) patch.driveFolderName = name;
+  if (home) {
+    const name = await drive().nameHome(home, state.cfg.driveEmail);
+    if (home.id !== state.cfg.homeFolderId) patch.homeFolderId = home.id;
+    if (name !== state.cfg.homeFolderName) patch.homeFolderName = name;
+  }
+  if (root) {
+    if (root.id !== state.cfg.driveFolderId) patch.driveFolderId = root.id;
+    if (root.name !== state.cfg.driveFolderName) patch.driveFolderName = root.name;
+  }
   if (Object.keys(patch).length) {
     await settings.merge(patch);
     state.cfg = await settings.all();
   }
-  return true;
+  // Дом без единого альбома — то же самое, что и вовсе без папок: снимать
+  // некуда. Спрашиваем, кто пришёл, — заведение дома там уже учтено.
+  return root ? true : askWhoYouAre();
+}
+
+/**
+ * Дом: найти или завести. Заводится он ровно там, где человек сказал «альбом
+ * заведу я», — и вместе с первым альбомом, потому что дом без альбомов
+ * бесполезен.
+ */
+async function ensureOwnHome() {
+  const found = await drive().findHome(state.cfg.homeFolderId);
+  const home = found
+    || await drive().createHome(rootName(GOOGLE.folderName, state.cfg.driveEmail));
+  const name = found ? await drive().nameHome(home, state.cfg.driveEmail) : home.name;
+  await settings.merge({ homeFolderId: home.id, homeFolderName: name });
+  state.cfg = await settings.all();
+  return home.id;
+}
+
+/** Первый альбом: дом плюс папка ребёнка внутри него. */
+async function createFirstAlbum() {
+  const homeId = await ensureOwnHome();
+  const root = await drive().createRoot(state.cfg.babyName || 'Малыш', homeId);
+  await settings.merge({ driveFolderId: root.id, driveFolderName: root.name });
+  state.cfg = await settings.all();
+  return root;
+}
+
+/**
+ * Подключение к чужой папке. Что именно выбрали — дом со всеми детьми или
+ * папку одного ребёнка, — решает не человек, а содержимое: первому родителю
+ * проще поделиться домом целиком, но чаще делятся одним ребёнком.
+ *
+ * @param {(s:string)=>void} say куда писать отказы: в «Настройках» это тост,
+ *        а поверх окна выбора папки тоста не видно — там строчка ошибки.
+ * @returns {Promise<?{id:string,name:string}>} папка альбома, если подключились
+ */
+async function pickShared(say = toast) {
+  const token = await G.getAccessToken({ interactive: true });
+  const folder = await pickFolder(token);
+  if (!folder) { say(PICKER_HINT); return null; }
+  if (yearFolder(folder.name)) { say(YEAR_FOLDER); return null; }
+
+  const kind = await drive().folderKind(folder.id);
+  if (kind === 'home') {
+    await drive().adoptHome(folder.id);
+    await settings.merge({ homeFolderId: folder.id, homeFolderName: folder.name });
+    const albums = await drive().listProjects(folder.id);
+    if (!albums.length) {
+      say(`В папке «${folder.name}» нет ни одного альбома. Попросите первого ` +
+          'родителя дать доступ на папку ребёнка — она лежит внутри этой.');
+      state.cfg = await settings.all();
+      return null;
+    }
+    // Метку на чужие папки ставим свою: она приватная, владельцу от неё ни
+    // холодно ни жарко, а без неё эти альбомы не попадут в список «Кого
+    // снимаем» — он собирается как раз по меткам.
+    for (const a of albums) await drive().adoptRoot(a.id);
+    // Детей может оказаться несколько — открываем первого и говорим, где
+    // переключиться: гадать за человека тут не на чем.
+    await store.switchProject(drive(), albums[0]);
+    if (albums.length > 1) toast('Кого снимаем — выбирается в настройках');
+    state.cfg = await settings.all();
+    return albums[0];
+  }
+
+  await drive().adoptRoot(folder.id);
+  // Дни прежней папки к этой не относятся: человек только что сказал,
+  // какой альбом его, — остальное кэш, и он пересоберётся из папки.
+  await store.switchProject(drive(), folder);
+  state.cfg = await settings.all();
+  return folder;
 }
 
 /**
@@ -683,8 +786,10 @@ async function renderGoogleCard() {
   // строчки перепутать их можно, ничего не заметив.
   const hasFolder = connected && Boolean(cfg.driveFolderId);
   show('google-folder', connected);
+  // Показываем путь, а не одно имя: папок теперь две, и «Алиса» без дома над
+  // ней не отвечает на вопрос «куда именно уходят снимки».
   $('google-folder-name').textContent = hasFolder
-    ? cfg.driveFolderName
+    ? (cfg.homeFolderId ? `${cfg.homeFolderName} / ${cfg.driveFolderName}` : cfg.driveFolderName)
     : 'Папка не выбрана';
 
   // Обновлять и открывать нечего, пока папки нет; выбрать — единственное,
@@ -1703,9 +1808,139 @@ function renderThemeCard() {
   }
 }
 
+/**
+ * Список альбомов: по одному на ребёнка.
+ *
+ * Собирается не из локальной памяти, а из Диска — по метке на папках. Иначе
+ * второй телефон того же человека не увидел бы альбом, заведённый на первом,
+ * и завёл бы рядом второй такой же.
+ */
+async function renderAlbumsCard() {
+  const list = $('albums-list');
+  const status = $('albums-status');
+  const add = $('btn-album-new');
+  const say = (text, canAdd = false) => {
+    list.textContent = '';
+    status.textContent = text;
+    status.classList.remove('hidden');
+    add.classList.toggle('hidden', !canAdd);
+  };
+
+  if (!configured() || !state.cfg.driveEmail) {
+    return say('Альбомы живут в папках Google Диска — подключите Google.');
+  }
+  // Список стоит запроса к Диску, поэтому платим за него только когда на
+  // него смотрят: «Настройки» перерисовываются и после каждой синхронизации,
+  // с какого бы экрана она ни шла.
+  if ($('screen-more').classList.contains('hidden')) return;
+  if (!navigator.onLine) {
+    return say(state.cfg.driveFolderName
+      ? `Нет сети. Сейчас снимаем в «${state.cfg.driveFolderName}».`
+      : 'Нет сети — список альбомов покажу, когда связь появится.');
+  }
+
+  say('Смотрю, какие есть…');
+  let albums;
+  try {
+    albums = await drive().listRoots();
+  } catch (e) {
+    return say(e.message || 'Диск не ответил — список альбомов не пришёл.');
+  }
+
+  list.textContent = '';
+  status.classList.add('hidden');
+  add.classList.remove('hidden');
+  if (!albums.length) {
+    return say('Ни одного альбома пока нет.', true);
+  }
+
+  for (const album of albums) {
+    const on = album.id === state.cfg.driveFolderId;
+    const row = document.createElement('button');
+    row.className = 'album' + (on ? ' now' : '');
+    row.type = 'button';
+    row.setAttribute('aria-pressed', String(on));
+    const name = document.createElement('b');
+    name.textContent = album.name;
+    row.append(name);
+    // Чужая папка — это общий альбом второго родителя. Разница видна и в
+    // Диске, но здесь она важнее: снимать в неё можно, переименовывать её
+    // нельзя, и человек должен понимать, почему.
+    if (!album.ownedByMe) {
+      const mark = document.createElement('span');
+      mark.className = 'album-note';
+      mark.textContent = 'общий';
+      row.append(mark);
+    }
+    row.onclick = () => useAlbum(album);
+    list.append(row);
+  }
+}
+
+/** Переключение на другой альбом — по нажатию на строчку в списке. */
+async function useAlbum(album) {
+  if (album.id === state.cfg.driveFolderId) return;
+  progressOpen(`Открываю «${album.name}»`);
+  try {
+    await store.switchProject(drive(), album);
+    state.cfg = await settings.all();
+    applyTheme(state.cfg.theme);
+    freeUrls();
+    progressClose();
+    await runSync();
+  } catch (e) {
+    progressClose();
+    toast(e.message || 'Не удалось переключиться на другой альбом');
+  }
+}
+
+/**
+ * Новый альбом. Имя и дату спрашиваем сразу: без даты рождения приложение не
+ * умеет считать дни, а альбом без имени — безымянная папка в Диске.
+ */
+async function newAlbum() {
+  const got = await ask({
+    title: 'Новый альбом',
+    text: 'Так будет называться папка внутри «Timelapse». Оформление и ' +
+          'настройки видео перейдут из общих — вводить их заново не нужно.',
+    inputs: [
+      { key: 'name', label: 'Имя', type: 'text' },
+      { key: 'birth', label: 'Дата рождения', type: 'date', value: D.todayKey() },
+    ],
+    yes: 'Завести',
+    danger: false,
+  });
+  if (!got) return;
+  if (!got.name) return toast('Без имени папку не завести');
+  if (!got.birth) return toast('Поставьте дату — от неё считаются дни');
+
+  progressOpen(`Завожу «${got.name}»`);
+  try {
+    const homeId = await ensureOwnHome();
+    const root = await drive().createRoot(got.name, homeId);
+    await store.switchProject(drive(), root);
+    const future = D.diffDays(D.todayKey(), got.birth) > 0;
+    await settings.merge({
+      babyName: got.name,
+      birthDate: got.birth,
+      dueDate: future ? got.birth : null,
+    });
+    state.cfg = await settings.all();
+    await pushProfile(drive());
+    freeUrls();
+    progressClose();
+    toast(`Альбом «${root.name}» заведён`);
+    await runSync();
+  } catch (e) {
+    progressClose();
+    toast(e.message || 'Не удалось завести альбом');
+  }
+}
+
 async function renderMore() {
   const cfg = state.cfg;
   await renderGoogleCard();
+  await renderAlbumsCard();
   $('set-name').value = cfg.babyName || '';
   $('set-birth').value = cfg.birthDate || '';
   renderThemeCard();
@@ -2064,8 +2299,31 @@ function bind() {
       await saveShared();
       toast('Сохранено');
     };
-  saveField('set-name', 'babyName', v => v.trim());
   saveField('set-birth', 'birthDate');
+
+  const renameProjectFolder = async name => {
+    if (!configured() || !state.cfg.driveEmail || !navigator.onLine) return null;
+    return store.renameProject(drive(), name);
+  };
+
+  // Имя ребёнка — ещё и имя его папки в Диске. Переименовываем сразу: искать
+  // «Алису» человек будет по имени, а не по тому, как папку назвали в день
+  // заведения альбома.
+  $('set-name').onchange = async e => {
+    const name = e.target.value.trim();
+    await settings.set('babyName', name);
+    await saveShared();
+    try {
+      const got = await renameProjectFolder(name);
+      state.cfg = await settings.all();
+      await renderAlbumsCard();
+      toast(got ? `Сохранено, папка теперь «${got}»` : 'Сохранено');
+    } catch {
+      toast('Сохранено, но папку переименовать не вышло');
+    }
+  };
+
+  $('btn-album-new').onclick = newAlbum;
 
   $('set-theme').onclick = async e => {
     const btn = e.target.closest('.theme-opt');
@@ -2107,14 +2365,8 @@ function bind() {
 
   $('btn-pick-folder').onclick = async () => {
     try {
-      const token = await G.getAccessToken({ interactive: true });
-      const folder = await pickFolder(token);
-      if (!folder) return toast(PICKER_HINT);
-      if (yearFolder(folder.name)) return toast(YEAR_FOLDER);
-      await drive().adoptRoot(folder.id);
-      await store.forgetAlbum();
-      await settings.merge({ driveFolderId: folder.id, driveFolderName: folder.name });
-      state.cfg = await settings.all();
+      const folder = await pickShared();
+      if (!folder) return;
       await renderGoogleCard();
       toast(`Папка «${folder.name}» подключена`);
       await runSync();

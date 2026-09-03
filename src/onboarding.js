@@ -11,7 +11,7 @@ import { GOOGLE, configured, pickerReady } from '../config.js';
 import * as G from './google.js';
 import { createDrive, rootName } from './drive.js';
 import { pickFolder } from './picker.js';
-import { forgetAlbum } from './store.js';
+import { forgetAlbum, renameProject } from './store.js';
 import { fetchProfile, pushProfile, countRemoteDays, PROFILE_KEYS } from './profile.js';
 import * as D from './dates.js';
 
@@ -52,7 +52,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
     const state = {
       signedIn: Boolean(cfg.driveEmail),
       folderId: cfg.driveFolderId,
-      folderName: cfg.driveFolderName || GOOGLE.folderName,
+      folderName: cfg.driveFolderName,
       remoteDays: 0,
       remoteProfile: false,
       reauth: false,
@@ -141,8 +141,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
      *        из-за которой второй родитель начинает снимать в отдельный альбом.
      */
     async function useFolder(root, { found = false } = {}) {
-      const email = await settings.get('driveEmail');
-      const name = await drive.nameRoot(root, email);
+      const name = root.name;
 
       state.folderId = root.id;
       state.folderName = name;
@@ -294,8 +293,17 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       err.textContent = '';
       button.disabled = true;
       try {
-        const email = await settings.get('driveEmail');
-        const root = await drive.createRoot(rootName(GOOGLE.folderName, email));
+        const cfg2 = await settings.all();
+        // Дом заводится вместе с первым альбомом: дом без альбомов бесполезен,
+        // а спрашивать про два уровня папок у человека, который просто хочет
+        // снимать, — значит рассказывать ему про наше устройство.
+        const found = await drive.findHome(cfg2.homeFolderId);
+        const home = found
+          || await drive.createHome(rootName(GOOGLE.folderName, cfg2.driveEmail));
+        const homeName = found ? await drive.nameHome(home, cfg2.driveEmail) : home.name;
+        await settings.merge({ homeFolderId: home.id, homeFolderName: homeName });
+        // Имя ребёнка спросят на следующем шаге — тогда папка и переименуется.
+        const root = await drive.createRoot(cfg2.babyName || 'Малыш', home.id);
         await useFolder(root);
         onToast(`Папка «${root.name}» создана`);
       } catch (e) {
@@ -334,13 +342,34 @@ export function runOnboarding({ onToast = () => {} } = {}) {
             'та, что подписана почтой. В окне выбора вернитесь на шаг назад.';
           return;
         }
-        // Выбранная папка чужая, поэтому nameRoot её не тронет — подпись
-        // на ней уже стоит, от владельца.
-        await drive.adoptRoot(folder.id);
+        // Что выбрали — дом со всеми детьми или папку одного ребёнка, —
+        // решает содержимое: первому родителю проще поделиться домом целиком,
+        // но чаще делятся одним ребёнком.
+        const kind = await drive.folderKind(folder.id);
+        let album = { id: folder.id, name: folder.name, ownedByMe: false };
+        if (kind === 'home') {
+          await drive.adoptHome(folder.id);
+          await settings.merge({ homeFolderId: folder.id, homeFolderName: folder.name });
+          const albums = await drive.listProjects(folder.id);
+          if (!albums.length) {
+            err.textContent =
+              `В папке «${folder.name}» нет ни одного альбома. Попросите ` +
+              'первого родителя дать доступ на папку ребёнка — она лежит ' +
+              'внутри этой.';
+            return;
+          }
+          // Метку на чужие папки ставим свою: без неё эти альбомы не попадут
+          // в список «Кого снимаем» — он собирается по меткам.
+          for (const a of albums) await drive.adoptRoot(a.id);
+          album = albums[0];
+        } else {
+          // Папка чужая, подпись на ней уже стоит — от владельца.
+          await drive.adoptRoot(folder.id);
+        }
         // Дни прежней папки к этой не относятся — кэш пересоберётся из неё.
         await forgetAlbum();
-        await useFolder({ id: folder.id, name: folder.name, ownedByMe: false });
-        onToast(`Папка «${folder.name}» подключена`);
+        await useFolder(album);
+        onToast(`Папка «${album.name}» подключена`);
       } catch (e) {
         err.textContent = e.message || 'Не удалось выбрать папку';
       }
@@ -383,6 +412,14 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         $('wiz-folder-text').textContent = 'Ищу папку в вашем Диске…';
 
         try {
+          // Дом ищем всегда, даже когда альбом уже известен: в нём лежит общий
+          // config.json, и без его id настройки уехали бы мимо.
+          const cfg2 = await settings.all();
+          const home = await drive.findHome(cfg2.homeFolderId);
+          if (home) {
+            const name = await drive.nameHome(home, cfg2.driveEmail);
+            await settings.merge({ homeFolderId: home.id, homeFolderName: name });
+          }
           const root = await drive.findRoot(state.folderId);
           if (root) return await useFolder(root, { found: true });
           askWhoYouAre();
@@ -449,12 +486,20 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           $('wiz-baby-error').textContent = 'Поставьте дату — от неё считаются дни';
           return false;
         }
+        const name = $('wiz-name').value.trim();
         const future = D.diffDays(D.todayKey(), birth) > 0;
         await settings.merge({
-          babyName: $('wiz-name').value.trim(),
+          babyName: name,
           birthDate: birth,
           dueDate: future ? birth : null,
         });
+        // Папку заводили до того, как узнали имя, — теперь оно есть. Не вышло
+        // (нет сети, папка чужая) — не беда: имя ребёнка от имени папки
+        // не зависит, а переименовать её можно и руками в Диске.
+        try {
+          const got = await renameProject(drive, name);
+          if (got) state.folderName = got;
+        } catch { /* Диск не ответил — папка останется как есть */ }
         return true;
       },
     };

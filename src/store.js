@@ -95,12 +95,55 @@ export async function ensureFolder(drive) {
     e.code = 'no-folder';
     throw e;
   }
-  const name = await drive.nameRoot(root, cfg.driveEmail);
   const patch = {};
   if (root.id !== cfg.driveFolderId) patch.driveFolderId = root.id;
-  if (name !== cfg.driveFolderName) patch.driveFolderName = name;
+  if (root.name !== cfg.driveFolderName) patch.driveFolderName = root.name;
   if (Object.keys(patch).length) await settings.merge(patch);
   return root.id;
+}
+
+/**
+ * Переключение на другой альбом.
+ *
+ * Кэш при этом стирается целиком, и это не расточительность, а единственный
+ * честный ход: опись, миниатюры и указатель на config.json собраны из прежней
+ * папки и к новой отношения не имеют. Терять нечего — правда лежит в папке,
+ * опись вернётся оттуда одним запросом.
+ *
+ * @param {{id:string, name:string}} root папка альбома
+ */
+export async function switchProject(drive, root) {
+  await forgetAlbum();
+  await settings.merge({
+    driveFolderId: root.id,
+    driveFolderName: root.name,
+    // Имя и дата рождения у каждого ребёнка свои, и старые здесь — прямая
+    // ложь: до первой синхронизации на экране стояло бы имя прошлого альбома.
+    babyName: '', birthDate: null, dueDate: null,
+  });
+  const files = await drive.listDayFiles(root.id);
+  await pullProfile(drive, files);
+  return root.id;
+}
+
+/**
+ * Имя папки альбома — это имя ребёнка. Поменяли имя в настройках — папка в
+ * Диске едет следом, иначе человек ищет «Алису» и не находит.
+ *
+ * Чужую папку не трогаем: она на виду у владельца, и переименовывать её не
+ * наше дело. Пустое имя тоже не повод: безымянная папка в Диске хуже, чем
+ * папка со старым именем.
+ */
+export async function renameProject(drive, name) {
+  const cfg = await settings.all();
+  const clean = (name || '').trim();
+  if (!clean || !cfg.driveFolderId || clean === cfg.driveFolderName) return null;
+  if (typeof drive.rename !== 'function') return null;
+  const root = await drive.findRoot(cfg.driveFolderId);
+  if (!root || !root.ownedByMe) return null;
+  const got = await drive.rename(root.id, clean);
+  await settings.set('driveFolderName', got);
+  return got;
 }
 
 /**

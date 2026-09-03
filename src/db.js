@@ -272,10 +272,16 @@ const DEFAULT_SETTINGS = {
 
   // Google Диск
   onboardingDone: false,
-  driveFolderId: null,     // id папки приложения
+  // Дом — одна папка на человека, внутри неё все альбомы и общий config.json.
+  homeFolderId: null,
+  homeFolderName: 'Timelapse',
+  baseFileId: null,        // id общего config.json в доме
+  // Альбом — папка одного ребёнка: тот, кого снимают прямо сейчас. Всё
+  // остальное приложение отсчитывает от неё и про дом не знает.
+  driveFolderId: null,     // id папки активного альбома
   cacheFolderId: null,     // из какой папки собран кэш — см. store.refresh
-  profileFileId: null,     // id config.json в этой папке
-  driveFolderName: 'TimelapseBaby',
+  profileFileId: null,     // id config.json в этом альбоме
+  driveFolderName: '',
   driveEmail: null,        // чей аккаунт подключён
   lastSyncAt: null,
   autoSync: true,          // синхронизировать сразу после съёмки
