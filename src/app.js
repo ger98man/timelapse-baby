@@ -4,7 +4,7 @@ import { formatBytes, loadImage, makeCanvas, canvasToBlob } from './img.js';
 import { drawAligned, renderSquareBlob } from './align.js';
 import { createGhostCamera, cameraError } from './ghost.js';
 import { buildVideo, videoSupported, pickMime, drawCaption } from './video.js';
-import { exportArchive, importArchive } from './archive.js';
+import { exportArchive, exportRoot, parseArchive, applyAlbum } from './archive.js';
 import { pushProfile } from './profile.js';
 import { createZip } from './zip.js';
 import { GOOGLE, configured, pickerReady } from '../config.js';
@@ -685,6 +685,63 @@ async function ensureOwnHome() {
   await settings.merge({ homeFolderId: home.id, homeFolderName: name });
   state.cfg = await settings.all();
   return home.id;
+}
+
+/**
+ * Загрузка архива корневой папки: дни разъезжаются по своим альбомам.
+ *
+ * Приложение работает с одним альбомом за раз, поэтому раскладка идёт по
+ * очереди: переключились, разложили, дальше. Альбом, которого в Диске ещё
+ * нет, заводится по имени папки в архиве — иначе восстановить корневую папку
+ * на новом аккаунте было бы нечем.
+ *
+ * В конце возвращаемся туда, где человек был: оказаться в чужом ребёнке,
+ * не нажав ничего, — худший из возможных финалов.
+ *
+ * @param {Array} groups разобранные альбомы из архива
+ */
+async function importRoot(groups) {
+  const was = state.cfg.driveFolderId;
+  const homeId = state.cfg.homeFolderId || await ensureOwnHome();
+  const known = await drive().listProjects(homeId);
+  let added = 0, skipped = 0;
+
+  try {
+    for (const group of groups) {
+      let album = known.find(a => folderLabel(a.name) === group.name);
+      if (!album) {
+        album = await drive().createRoot(group.name, homeId);
+        known.push(album);
+      }
+      await store.switchProject(drive(), album);
+
+      // Имя и дата рождения лежат в settings.json архива. Ставим их только
+      // там, где своих ещё нет: архив может быть старее папки.
+      const cfg = await settings.all();
+      if (group.meta && !cfg.birthDate && group.meta.birthDate) {
+        await settings.merge({
+          babyName: group.meta.babyName || group.name,
+          birthDate: group.meta.birthDate,
+          dueDate: group.meta.dueDate || null,
+        });
+        try { await pushProfile(drive()); } catch { /* уедет при первой правке */ }
+      }
+
+      const res = await applyAlbum(drive(), group, { replace: false },
+        (d, t, label) => progressSet(d, t, `${group.name}: ${label}`));
+      added += res.added;
+      skipped += res.skipped;
+    }
+  } finally {
+    // Вернуться туда, откуда пришли. Не вышло — не беда: альбом выбирается
+    // в настройках, и человек увидит там, где он оказался.
+    if (was && was !== (await settings.get('driveFolderId'))) {
+      const back = await drive().getFolder(was);
+      if (back) await store.switchProject(drive(), back);
+    }
+    state.cfg = await settings.all();
+  }
+  return { added, skipped };
 }
 
 /**
@@ -2624,6 +2681,38 @@ function bind() {
     }
   };
 
+  // Выгрузка всей корневой папки: все дети разом, каждый своей папкой внутри.
+  // Читается прямо из Диска — кэш есть только у открытого сейчас альбома.
+  $('btn-export-root').onclick = async () => {
+    if (!requireOnline()) return;
+    let albums;
+    progressOpen('Смотрю, какие альбомы есть');
+    try {
+      albums = await drive().albumsFor(state.cfg.homeFolderId, state.cfg.driveFolderId);
+    } catch (e) {
+      progressClose();
+      return toast(e.message || 'Диск не ответил — список альбомов не пришёл');
+    }
+    if (!albums.length) { progressClose(); return toast('Пока нечего выгружать'); }
+
+    try {
+      const { zip, days, skipped } = await exportRoot(drive(), albums,
+        (d, t, label) => progressSet(d, t, label));
+      progressClose();
+      const home = folderLabel(homeLabel(state.cfg)) || 'timelapse';
+      const how = await saveBlob(zip, `${home}-${D.todayKey()}.zip`);
+      if (skipped) {
+        toast(`В архиве ${days} ${D.plural(days, 'день', 'дня', 'дней')}; ` +
+          `${skipped} не удалось забрать из папки`, 4200);
+      } else if (how === 'downloaded') {
+        toast(`Архив сохранён в «Загрузки»: альбомов ${albums.length}, дней ${days}`);
+      }
+    } catch (e) {
+      progressClose();
+      toast(e.message || 'Не удалось собрать архив');
+    }
+  };
+
   $('btn-import').onclick = () => $('zip-input').click();
   $('zip-input').onchange = async e => {
     const file = e.target.files && e.target.files[0];
@@ -2631,10 +2720,21 @@ function bind() {
     if (!file) return;
     progressOpen('Читаю архив');
     try {
-      const res = await importArchive(drive(), file, { replace: false },
-        (d, t, label) => progressSet(d, t, label));
+      const albums = await parseArchive(file);
+      if (!albums.length) {
+        progressClose();
+        return toast('В архиве нет ни одного дня');
+      }
+      // Один альбом — кладём в открытый сейчас, как было всегда. Несколько —
+      // это архив корневой папки: раскладываем по детям, заводя недостающих.
+      const res = albums.length === 1
+        ? await applyAlbum(drive(), albums[0], { replace: false },
+            (d, t, label) => progressSet(d, t, label))
+        : await importRoot(albums);
       progressClose();
       toast(`Добавлено дней: ${res.added}` + (res.skipped ? `, пропущено: ${res.skipped}` : ''));
+      state.cfg = await settings.all();
+      await renderToday();
       await renderMore();
     } catch (err) {
       progressClose();

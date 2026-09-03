@@ -22,6 +22,7 @@ import { entries, blobs, bench, settings, clearCache } from '../src/db.js';
 import * as store from '../src/store.js';
 import { pushProfile } from '../src/profile.js';
 import { LANES } from '../src/pool.js';
+import { exportRoot, parseArchive } from '../src/archive.js';
 import { caseOf, check, run, jpeg } from './harness.js';
 import { fakeDrive } from './fake-drive.js';
 
@@ -364,6 +365,33 @@ run(async () => {
   await clearCache();
   await settings.merge({ babyName: '', birthDate: null, driveFolderId: null,
                          profileFileId: null, homeFolderId: null, baseFileId: null });
+
+  // Архив всей корневой папки: у каждого ребёнка своя папка внутри, и дни
+  // лежат в ней ровно так же, как в Диске.
+  await store.switchProject(fam, mark);
+  await store.putPhoto(fam, '2026-09-11', await jpeg('#69c'));
+  await store.putComment(fam, '2026-09-11', 'первый день Марка');
+  const packed = await exportRoot(fam, [
+    { id: alice.id, name: 'Алиска' },
+    { id: mark.id, name: 'Марк' },
+  ]);
+  check('в архиве дни обоих', packed.days === 2, `дней=${packed.days}`);
+
+  const groups = await parseArchive(packed.zip);
+  check('архив разобрался на два альбома', groups.length === 2,
+    groups.map(g => g.name).join(', '));
+  const byName = Object.fromEntries(groups.map(g => [g.name, g]));
+  check('у каждого свой день',
+    byName['Алиска'] && byName['Алиска'].photos.has('2026-09-10') &&
+    byName['Марк'] && byName['Марк'].photos.has('2026-09-11'));
+  check('комментарий приехал вместе с днём',
+    byName['Марк'].texts.get('2026-09-11') === 'первый день Марка',
+    JSON.stringify(byName['Марк'].texts.get('2026-09-11')));
+  check('имя и дата ребёнка лежат в его же папке архива',
+    byName['Марк'].meta && byName['Марк'].meta.birthDate === '2026-05-05');
+
+  await store.switchProject(fam, alice);
+  await store.refresh(fam);
 });
 </script>
 </body>
