@@ -32,6 +32,7 @@ const state = {
   ghost: null,       // живая камера, пока открыт её оверлей
   conn: { status: 'unknown', email: '', note: '' },   // связь с Google
   connAt: 0,         // когда её проверяли в последний раз
+  syncing: false,    // читаем папку прямо сейчас — видно во второй строке
   screen: null,      // какой экран открыт — чтобы знать, с какого уходим
 };
 
@@ -286,6 +287,8 @@ function drive() {
 async function runSync() {
   if (!configured()) { toast('Google не настроен'); return; }
   progressOpen('Обновляю из папки');
+  state.syncing = true;
+  renderConn();
   try {
     await G.getAccessToken({ interactive: true });
     const res = await store.refresh(drive(), {
@@ -312,6 +315,9 @@ async function runSync() {
     if (e && e.code === 'no-folder' && await ensureAlbumFolder()) return runSync();
     toast(e.message || 'Не удалось обновить из папки');
     await checkConnection();      // не вышло — полоска должна честно покраснеть
+  } finally {
+    state.syncing = false;
+    renderConn();
   }
 }
 
@@ -362,6 +368,8 @@ async function ensureSharedProfile() {
 function syncQuietly() {
   if (!configured() || !state.cfg.autoSync || !state.cfg.driveEmail) return;
   if (!navigator.onLine) return;
+  state.syncing = true;
+  renderConn();
   store.refresh(drive())
     .then(ensureSharedProfile)
     .then(() => settings.all())
@@ -378,7 +386,8 @@ function syncQuietly() {
         return ensureAlbumFolder().then(ok => { if (ok) syncQuietly(); });
       }
       return checkConnection().catch(() => { /* обновится при следующей возможности */ });
-    });
+    })
+    .finally(() => { state.syncing = false; renderConn(); });
 }
 
 // --- связь с Google: полоска в шапке и проверка на входе ---------------------
@@ -467,6 +476,40 @@ function albumPath(cfg) {
   return cfg.homeFolderId && home ? `${home} / ${album}` : album;
 }
 
+/**
+ * Корневая папка целиком, с почтой владельца. Здесь приписка как раз к месту:
+ * в полоске она отвечает на вопрос «в чей Диск уезжает снимок», а у второго
+ * родителя это единственное, что отличает свою папку от общей.
+ *
+ * Корня может не быть: второму родителю дают доступ на папку одного ребёнка.
+ * Тогда честнее показать её саму, чем пустое место.
+ */
+function homeLabel(cfg) {
+  return cfg.homeFolderId
+    ? (cfg.homeFolderName || 'Главная папка')
+    : (cfg.driveFolderName || '');
+}
+
+/**
+ * Когда папку читали в последний раз. Календарь и «Сегодня» рисуются из кэша,
+ * и без этой строчки нельзя отличить «сегодня ещё никто ничего не снял» от
+ * «мы просто давно не заглядывали в папку».
+ */
+function syncLabel() {
+  if (state.syncing) return 'обновляю…';
+  // Про отсутствие сети сказано строкой выше. Здесь важнее другое: насколько
+  // устарело то, что человек видит, — как раз без сети это и надо знать.
+  const at = state.cfg.lastSyncAt;
+  if (!at) return 'ещё не обновлялось';
+  const min = Math.floor((Date.now() - at) / 60000);
+  if (min < 1) return 'обновлено только что';
+  if (min < 60) return `обновлено ${min} ${D.plural(min, 'минуту', 'минуты', 'минут')} назад`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `обновлено ${h} ${D.plural(h, 'час', 'часа', 'часов')} назад`;
+  const d = Math.floor(h / 24);
+  return `обновлено ${d} ${D.plural(d, 'день', 'дня', 'дней')} назад`;
+}
+
 function renderConn() {
   const bar = $('conn');
   const { status, email, note } = state.conn;
@@ -482,14 +525,19 @@ function renderConn() {
   $('conn-mark').innerHTML = ok ? ICON_OK : ICON_BAD;
   $('conn-email').textContent = email || 'Google не подключён';
 
-  // Когда связь есть, «Подключен к Google» пересказывает зелёную галочку.
-  // Место дороже: детей и общих папок теперь несколько, и с любого экрана
-  // надо видеть, в чью папку и на кого уходит снимок, а не вспоминать.
-  const path = albumPath(state.cfg);
-  const tail = ok && path ? path : note;
-  $('conn-note').textContent = email ? '· ' + tail : '';
+  // Когда связь есть, «Подключен к Google» пересказывает зелёную галочку —
+  // на первой строке остаётся только то, что сломалось.
+  $('conn-note').textContent = email && !ok ? '· ' + note : '';
+
+  // Вторая строка — про папку: в чей Диск уезжает снимок и насколько свежо
+  // то, что показано на экране.
+  const home = homeLabel(state.cfg);
+  const second = $('conn-folder');
+  second.textContent = home;
+  $('conn-sync').textContent = home ? '· ' + syncLabel() : '';
+  second.parentElement.classList.toggle('hidden', !home);
   bar.title = ok
-    ? `${email} — снятое уезжает в «${path || 'папку'}»`
+    ? `${email} — снятое уезжает в «${albumPath(state.cfg) || 'папку'}»`
     : note;
 
   // Без сети переподключаться некуда: окно Google просто не откроется.
@@ -735,6 +783,11 @@ async function pickShared(say = toast) {
   }
 
   await drive().adoptRoot(folder.id);
+  // Выбрали папку одного ребёнка — значит, корневой у нас теперь нет: доступ
+  // дали на него, а не на весь дом первого родителя. Оставить прежний корень
+  // означало бы показывать в полоске папку, к которой снимок отношения не
+  // имеет, и заводить следующего ребёнка не рядом с этим.
+  await settings.merge({ homeFolderId: null, homeFolderName: '' });
   // Дни прежней папки к этой не относятся: человек только что сказал,
   // какой альбом его, — остальное кэш, и он пересоберётся из папки.
   await store.switchProject(drive(), folder);
@@ -869,25 +922,27 @@ async function renderGoogleCard() {
   show('btn-google-connect', !connected);
   show('btn-google-off', connected);
 
-  // Какая папка подключена — как в мастере. У второго родителя рядом с общей
-  // папкой лежит своя, названия отличаются только почтой в конце, и без этой
-  // строчки перепутать их можно, ничего не заметив.
-  const hasFolder = connected && Boolean(cfg.driveFolderId);
+  // Эта карточка — про корневую папку целиком, а не про ребёнка: кого снимаем,
+  // спрашивают выше, в своей карточке. Имя показываем полное, с почтой
+  // владельца: у второго родителя рядом с общей папкой лежит своя, и
+  // отличаются они ровно этой припиской.
+  const hasFolder = connected && Boolean(cfg.homeFolderId || cfg.driveFolderId);
   show('google-folder', connected);
-  // Показываем путь, а не одно имя: папок теперь две, и «Алиса» без дома над
-  // ней не отвечает на вопрос «куда именно уходят снимки».
   $('google-folder-name').textContent = hasFolder
-    ? albumPath(cfg)
+    ? homeLabel(cfg)
     : 'Папка не выбрана';
-  $('google-folder-name').title = hasFolder ? cfg.driveFolderName : '';
+  $('google-folder-name').title = hasFolder ? homeLabel(cfg) : '';
 
   // Обновлять и открывать нечего, пока папки нет; выбрать — единственное,
   // что в этот момент имеет смысл, поэтому кнопка так и называется.
   show('btn-sync', hasFolder);
   show('drive-link', hasFolder);
   $('btn-pick-label').textContent = hasFolder ? 'Поменять' : 'Выбрать';
+  // Открываем ту же папку, что показана в карточке, — иначе Диск открывает
+  // не то, на что человек только что смотрел.
+  const open = cfg.homeFolderId || cfg.driveFolderId;
   if (hasFolder) {
-    $('drive-link').href = `https://drive.google.com/drive/folders/${cfg.driveFolderId}`;
+    $('drive-link').href = `https://drive.google.com/drive/folders/${open}`;
   }
 
   // Почта и время синхронизации ушли: почта и так в полоске наверху, а «когда

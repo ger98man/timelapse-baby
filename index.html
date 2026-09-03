@@ -287,8 +287,16 @@
   <div id="conn" class="conn hidden" role="status" aria-live="polite">
     <span id="conn-mark" class="conn-mark"></span>
     <span class="conn-text">
-      <b id="conn-email"></b>
-      <span id="conn-note"></span>
+      <!-- Первая строка про аккаунт, вторая про корневую папку: это разные
+           вопросы, и на узком экране они не должны отъедать место друг у друга. -->
+      <span class="conn-line">
+        <b id="conn-email"></b>
+        <span id="conn-note"></span>
+      </span>
+      <span class="conn-line conn-second">
+        <span id="conn-folder"></span>
+        <span id="conn-sync"></span>
+      </span>
     </span>
     <button id="conn-fix" class="conn-fix hidden">Переподключить</button>
   </div>
@@ -480,11 +488,11 @@
         <p id="google-status" class="hint"></p>
         <button id="btn-google-connect" class="btn full hidden">Подключить Google</button>
         <button id="btn-google-off" class="btn full hidden">Выйти из учётной записи Google</button>
-        <p class="hint" id="google-hint">Второму родителю: пусть первый откроет папку
-          ребёнка в Диске и даст доступ на редактирование. Дальше приложение само
-          спросит при входе, первый вы или второй, — выберите общую папку, и оба
-          будете снимать в один альбом. Доступ можно дать и на всю папку
-          «Timelapse»: тогда вам достанутся все дети сразу.</p>
+        <p class="hint" id="google-hint">Это корневая папка: внутри неё лежат альбомы
+          всех детей, а «Поменять» выбирает другую корневую — например папку второго
+          родителя. Пусть он даст на неё доступ <b>на редактирование</b>, и вы будете
+          снимать вместе. Можно дать доступ и на папку одного ребёнка: тогда общим
+          станет только он. Кого снимаем — выбирается выше.</p>
       </div>
 
       <div class="card" id="export-card">

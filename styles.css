@@ -508,16 +508,27 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 }
 
 /* ---- Полоска связи с Google ---- */
-body.has-conn { --conn-h: 37px; }
+body.has-conn { --conn-h: 53px; }
 .conn {
   position: sticky; top: 0; z-index: 8;
   display: flex; align-items: center; gap: 9px;
-  min-height: 37px; padding: 6px 14px 6px 16px;
+  min-height: 53px; padding: 6px 14px 6px 16px;
   background: var(--tabbar-bg); backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--line);
   font-size: 12px; color: var(--muted);
 }
-.conn-text { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.conn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.conn-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+/* Вторая строка — про папку: тише первой. Аккаунт меняют раз в жизни, а папку
+   читают мельком, убеждаясь, что снимок уехал куда надо. */
+.conn-second { font-size: 11px; color: var(--faint); margin-top: 1px; }
+/* Имя папки режется, а «обновлено» — нет: время короткое и от него зависит,
+   доверять ли тому, что показано на экране. */
+#conn-folder {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#conn-sync { flex: none; white-space: nowrap; }
 /* На узком экране первой ужимается почта, а не то, что справа от неё.
    Обрезанная почта узнаётся по началу — аккаунт меняют раз в жизни; а справа
    стоит имя альбома, то есть на кого снимаем, и оно меняется каждый день.
