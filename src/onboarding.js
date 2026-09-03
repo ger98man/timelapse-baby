@@ -455,7 +455,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       renderChrome();
     }
 
-    /** «Завести альбом» — тот же вопрос про ребёнка, только папки ещё нет. */
+    /** «Создать новый альбом» — тот же вопрос про ребёнка, только папки ещё нет. */
     function startNewAlbum() {
       state.creating = true;
       addStep('baby', 'album');
@@ -568,7 +568,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         $('wiz-name').value = made ? '' : (c.babyName || '');
         $('wiz-birth').value = made ? D.todayKey() : (c.birthDate || D.todayKey());
         $('wiz-baby-error').textContent = '';
-        setNext(made ? 'Завести альбом' : 'Дальше');
+        setNext(made ? 'Создать альбом' : 'Дальше');
       },
 
       async install() {
@@ -628,13 +628,13 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         // в Диске.
         if (state.creating) {
           err.textContent = '';
-          setNext('Завожу…', false);
+          setNext('Создаю альбом…', false);
           try {
             const root = await createAlbum(name);
-            onToast(`Альбом «${root.name}» заведён`);
+            onToast(`Альбом «${root.name}» создан`);
           } catch (e) {
-            err.textContent = e.message || 'Не удалось завести альбом';
-            setNext('Завести альбом', true);
+            err.textContent = e.message || 'Не удалось создать альбом';
+            setNext('Создать альбом', true);
             return false;
           }
         }

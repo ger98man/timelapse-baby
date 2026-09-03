@@ -2116,7 +2116,7 @@ async function newAlbum() {
     'Оформление и настройки видео перейдут из общих — вводить их заново не нужно.');
   if (!got) return;
 
-  progressOpen(`Завожу «${got.name}»`);
+  progressOpen(`Создаю альбом «${got.name}»`);
   try {
     const homeId = home.id ? await useHome(home) : await ensureOwnHome();
     const root = await drive().createRoot(got.name, homeId);
@@ -2126,7 +2126,7 @@ async function newAlbum() {
     await pushProfile(drive());
     freeUrls();
     progressClose();
-    toast(`Альбом «${root.name}» заведён`);
+    toast(`Альбом «${root.name}» создан`);
     await runSync();
   } catch (e) {
     progressClose();
