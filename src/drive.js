@@ -138,12 +138,21 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
         if (!f.trashed) return f;
       } catch { /* удалили или отобрали доступ — поищем по метке */ }
     }
-    const found = await list(q([
+    const found = await listRoots();
+    return found[0] || null;
+  }
+
+  /**
+   * Все папки альбома, помеченные приложением: и своя, и те, к которым
+   * подключились. Нужны, чтобы не предлагать завести вторую свою, когда
+   * первая уже лежит в Диске.
+   */
+  async function listRoots() {
+    return list(q([
       `appProperties has { key='${TAG}Root' and value='1' }`,
       `mimeType='${FOLDER_MIME}'`,
       'trashed=false',
     ]), 'files(id,name,ownedByMe,appProperties),nextPageToken');
-    return found[0] || null;
   }
 
   /** Заводит папку альбома. Вызывается только по явному решению человека. */
@@ -406,7 +415,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   }
 
   return {
-    findRoot, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
+    findRoot, listRoots, createRoot, nameRoot, adoptRoot, folderForDay, putDayFile, updateProps,
     listDayFiles, listChildren, listTree, belongsToAlbum, download, trash, untrash,
     folderLink, usage,
   };

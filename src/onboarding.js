@@ -56,6 +56,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       remoteDays: 0,
       remoteProfile: false,
       reauth: false,
+      ownRoot: null,        // своя папка в Диске, если она не та, что подключена
     };
 
     // В мастере токен просим интерактивно: человек прямо сейчас у экрана и
@@ -163,6 +164,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       $('wiz-folder-new').classList.toggle('hidden', Boolean(root.ownedByMe));
       resetNewFolder();
       setNext('Дальше', true);
+      await findOwnRoot(root.id);
 
       // В этой же папке лежат и настройки, и вся история. Если они там
       // есть — спрашивать имя и дату не нужно, а дни подтянутся сами.
@@ -234,11 +236,53 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       }
     }
 
-    /** Возвращает кнопку «завести свою» в исходное, неподтверждённое состояние. */
+    /**
+     * Возвращает вторую кнопку в исходное, неподтверждённое состояние. Что она
+     * делает — зависит от того, лежит ли своя папка в Диске: если лежит,
+     * заводить ещё одну незачем, на неё можно просто переключиться.
+     */
     function resetNewFolder() {
       const b = $('wiz-folder-new');
       delete b.dataset.sure;
-      b.textContent = 'Завести свою папку';
+      b.textContent = state.ownRoot ? 'Переключиться на свою папку' : 'Завести свою папку';
+    }
+
+    /**
+     * Своя папка могла завестись раньше — на этом же телефоне или на другом.
+     * Тогда «Завести свою папку» не выбор, а ловушка: в Диске появляется
+     * второй альбом, и дальше человек снимает в него, а прошлые дни остаются
+     * в первом. Поэтому смотрим, есть ли своя папка помимо подключённой, и
+     * предлагаем переключиться на неё, а заводить — только когда её нет.
+     *
+     * @param {string} currentId папка, которая подключена прямо сейчас
+     */
+    async function findOwnRoot(currentId) {
+      state.ownRoot = null;
+      try {
+        const roots = await drive.listRoots();
+        state.ownRoot = roots.find(r => r.ownedByMe && r.id !== currentId) || null;
+      } catch { /* Диск не ответил — оставим кнопку как была */ }
+      resetNewFolder();
+      $('wiz-folder-new').title = state.ownRoot ? state.ownRoot.name : '';
+    }
+
+    /** Переключение на свою, уже существующую папку. Ничего не создаёт. */
+    async function switchToOwnFolder(button) {
+      const err = $('wiz-folder-error');
+      const own = state.ownRoot;
+      if (!own) return createOwnFolder(button);
+      err.textContent = '';
+      button.disabled = true;
+      try {
+        // Дни прежней папки к этой не относятся — кэш пересоберётся из неё.
+        await forgetAlbum();
+        await useFolder(own);
+        onToast(`Папка «${own.name}» подключена`);
+      } catch (e) {
+        err.textContent = e.message || 'Не удалось переключиться на свою папку';
+      } finally {
+        button.disabled = false;
+      }
     }
 
     /**
@@ -462,20 +506,21 @@ export function runOnboarding({ onToast = () => {} } = {}) {
 
     $('wiz-folder-create').onclick = () => createOwnFolder($('wiz-folder-create'));
 
-    // Завести свою поверх уже подключённой можно, но одним касанием — только
-    // пока переключать нечего. Если в текущей папке уже лежат дни, они в ней
-    // и останутся, и человек должен это увидеть до того, как нажмёт.
+    // Уйти из уже подключённой папки можно, но одним касанием — только пока
+    // уходить не от чего. Если в текущей папке уже лежат дни, они в ней и
+    // останутся, и человек должен это увидеть до того, как нажмёт.
     $('wiz-folder-new').onclick = () => {
       const b = $('wiz-folder-new');
       if (state.remoteDays && !b.dataset.sure) {
         b.dataset.sure = '1';
-        b.textContent = 'Всё равно завести новую';
+        b.textContent = state.ownRoot ? 'Всё равно переключиться' : 'Всё равно завести новую';
         $('wiz-folder-error').textContent =
           `В текущей папке ${state.remoteDays} дней — они останутся в ней.`;
         return;
       }
+      const own = Boolean(state.ownRoot);
       resetNewFolder();
-      return createOwnFolder(b);
+      return own ? switchToOwnFolder(b) : createOwnFolder(b);
     };
 
     $('wiz-pick-folder').onclick = connectToShared;
