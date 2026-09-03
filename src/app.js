@@ -505,8 +505,6 @@ function folderLine(cfg) {
  */
 function syncLabel() {
   if (state.syncing) return 'обновляю…';
-  // Про отсутствие сети сказано строкой выше. Здесь важнее другое: насколько
-  // устарело то, что человек видит, — как раз без сети это и надо знать.
   const at = state.cfg.lastSyncAt;
   if (!at) return 'ещё не обновлялось';
   const min = Math.floor((Date.now() - at) / 60000);
@@ -542,7 +540,10 @@ function renderConn() {
   const home = folderLine(state.cfg);
   const second = $('conn-folder');
   second.textContent = home;
-  $('conn-sync').textContent = home ? '· ' + syncLabel() : '';
+  // Давность обновления из полоски убрана: имя папки длиннее любой строчки,
+  // которую можно поставить рядом, и место лучше отдать ему целиком. Остаётся
+  // только то, чего в имени папки нет, — что прямо сейчас идёт чтение.
+  $('conn-sync').textContent = home && state.syncing ? '· обновляю…' : '';
   second.parentElement.classList.toggle('hidden', !home);
   bar.title = ok
     ? `${email} — снятое уезжает в «${albumPath(state.cfg) || 'папку'}»`
@@ -1031,8 +1032,12 @@ async function renderGoogleCard() {
     status.textContent = 'Аккаунт не подключён.';
     return;
   }
-  status.textContent = token ? '' : 'Нужен один тап, чтобы обновить доступ.';
-  status.classList.toggle('hidden', Boolean(token));
+  // Давность обновления живёт здесь, а не в полоске: в полоске её место
+  // забирает имя папки, а вопрос «свежее ли то, что я вижу» задают именно
+  // тут, рядом с кнопкой «Обновить».
+  const fresh = hasFolder ? syncLabel().replace(/^о/, 'О') : '';
+  status.textContent = token ? fresh : 'Нужен один тап, чтобы обновить доступ.';
+  status.classList.toggle('hidden', !status.textContent);
 }
 
 // --- экран «Сегодня» --------------------------------------------------------
