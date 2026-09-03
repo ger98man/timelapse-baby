@@ -490,12 +490,16 @@ function homeLabel(cfg) {
   return cfg.homeFolderId ? (cfg.homeFolderName || 'Главная папка') : '';
 }
 
-/** Что писать про папку там, где корневой может не оказаться. */
+/**
+ * Строчка про папку в полоске. Начинается со слова «Root», потому что под
+ * почтой аккаунта одно голое имя не объясняет, что это вообще такое: своя
+ * папка, общая, папка ребёнка — по имени не отличить.
+ */
 function folderLine(cfg) {
   const home = homeLabel(cfg);
-  if (home) return home;
+  if (home) return `Root: ${home}`;
   const album = folderLabel(cfg.driveFolderName);
-  return album ? `папка ребёнка «${album}»` : '';
+  return album ? `Root: нет, папка ребёнка «${album}»` : '';
 }
 
 /**
