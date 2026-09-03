@@ -449,13 +449,21 @@ async function checkConnection() {
 }
 
 /**
- * Куда уходит снятое — «дом / альбом». Почту из имени дома выкидываем: она
- * стоит рядом в той же полоске, и второй раз занимать ею полстроки незачем.
+ * Имя папки для показа — без приписки с почтой владельца.
+ *
+ * Приписка нужна ровно в одном месте: в окне выбора Google, где своя папка и
+ * общая иначе неразличимы. На наших экранах она только съедает строку — почта
+ * владельца и так стоит рядом, своя в полоске связи, чужая под именем альбома.
  */
+function folderLabel(name) {
+  return String(name || '').split(' — ')[0].trim();
+}
+
+/** Куда уходит снятое — «дом / альбом», обе части без приписок. */
 function albumPath(cfg) {
-  const album = cfg.driveFolderName;
+  const album = folderLabel(cfg.driveFolderName);
   if (!album) return '';
-  const home = (cfg.homeFolderName || '').split(' — ')[0];
+  const home = folderLabel(cfg.homeFolderName);
   return cfg.homeFolderId && home ? `${home} / ${album}` : album;
 }
 
@@ -820,8 +828,9 @@ async function renderGoogleCard() {
   // Показываем путь, а не одно имя: папок теперь две, и «Алиса» без дома над
   // ней не отвечает на вопрос «куда именно уходят снимки».
   $('google-folder-name').textContent = hasFolder
-    ? (cfg.homeFolderId ? `${cfg.homeFolderName} / ${cfg.driveFolderName}` : cfg.driveFolderName)
+    ? albumPath(cfg)
     : 'Папка не выбрана';
+  $('google-folder-name').title = hasFolder ? cfg.driveFolderName : '';
 
   // Обновлять и открывать нечего, пока папки нет; выбрать — единственное,
   // что в этот момент имеет смысл, поэтому кнопка так и называется.
@@ -1884,6 +1893,9 @@ async function renderAlbumsCard() {
   if (!albums.length) {
     return say('Ни одного альбома пока нет.', true);
   }
+  // Один альбом — переключаться не с чем, но видеть, на кого снимаем, всё
+  // равно нужно: строчка остаётся, а вот обещать выбор ей незачем.
+  list.classList.toggle('single', albums.length === 1);
 
   for (const album of albums) {
     const on = album.id === state.cfg.driveFolderId;
@@ -1891,18 +1903,36 @@ async function renderAlbumsCard() {
     row.className = 'album' + (on ? ' now' : '');
     row.type = 'button';
     row.setAttribute('aria-pressed', String(on));
+    row.title = album.name;               // полное имя папки, как в Диске
+
+    const text = document.createElement('span');
+    text.className = 'album-text';
     const name = document.createElement('b');
-    name.textContent = album.name;
-    row.append(name);
+    name.textContent = folderLabel(album.name);
+    text.append(name);
+
     // Чужая папка — это общий альбом второго родителя. Разница видна и в
     // Диске, но здесь она важнее: снимать в неё можно, переименовывать её
-    // нельзя, и человек должен понимать, почему.
+    // нельзя, и человек должен понимать, почему. Чья именно папка — тоже:
+    // общих может быть несколько, от разных людей.
     if (!album.ownedByMe) {
-      const mark = document.createElement('span');
-      mark.className = 'album-note';
-      mark.textContent = 'общий';
-      row.append(mark);
+      const owner = (album.owners || [])[0];
+      const sub = document.createElement('span');
+      sub.className = 'album-sub';
+      sub.textContent = owner && owner.emailAddress
+        ? `общая папка ${owner.emailAddress}`
+        : 'общая папка';
+      text.append(sub);
     }
+    row.append(text);
+
+    // Галочка на выбранном. Одна рамка читается как «поле ввода», и понять,
+    // что строчки переключаются, по ней нельзя.
+    const tick = document.createElement('span');
+    tick.className = 'album-tick';
+    tick.innerHTML = on ? ICON_OK : '';
+    row.append(tick);
+
     row.onclick = () => useAlbum(album);
     list.append(row);
   }

@@ -140,7 +140,11 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     });
   }
 
-  const FOLDER_FIELDS = 'files(id,name,ownedByMe,parents,appProperties),nextPageToken';
+  // owners нужен списку альбомов: у общей папки надо показать, чья она.
+  // Имя владельца в самой папке не спрашивают — оно там только приписка,
+  // и у папок, заведённых до всего этого, его нет вовсе.
+  const FOLDER_FIELDS =
+    'files(id,name,ownedByMe,parents,appProperties,owners(emailAddress)),nextPageToken';
 
   /**
    * Папка альбома, если она есть. Ничего не создаёт — и это главное: альбом

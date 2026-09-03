@@ -185,24 +185,34 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 .tile:active { transform: scale(.985); background: var(--line); }
 .tile:disabled { opacity: .45; }
 
-/* Список альбомов: по строчке на ребёнка. Выбранная подсвечена рамкой, а не
-   галочкой сбоку, — так видно, куда уйдёт снимок, не вчитываясь. */
+/* Список альбомов: по строчке на ребёнка. Выбранная — рамкой и галочкой:
+   одна рамка читается как поле ввода, и что строчки переключаются, по ней
+   не понять. */
 .albums { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .albums:empty { display: none; }
 .album {
-  display: flex; align-items: center; gap: 8px; width: 100%;
+  display: flex; align-items: center; gap: 10px; width: 100%;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 12px; padding: 13px 14px;
+  border-radius: 12px; padding: 12px 14px;
   color: var(--text); font: inherit; font-size: 15px;
   text-align: left; cursor: pointer;
 }
-.album b { font-weight: 550; overflow-wrap: anywhere; }
+.album-text { flex: 1; min-width: 0; }
+/* Имя ребёнка переносим, а не режем: оно короткое, и это главное в строчке. */
+.album b { display: block; font-weight: 550; overflow-wrap: anywhere; }
+/* Чья папка — приписка второй строкой. Почта длинная и режется многоточием:
+   узнать по ней надо человека, а не прочитать до буквы. */
+.album-sub {
+  display: block; margin-top: 2px;
+  font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .album.now { border-color: var(--accent); background: var(--surface-2); }
 .album:active { transform: scale(.99); }
-.album-note {
-  margin-left: auto; flex: none;
-  font-size: 12px; color: var(--muted);
-}
+.album-tick { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.album-tick svg { width: 100%; height: 100%; display: block; }
+/* Альбом один — переключать не с чем, и галочка обещала бы выбор впустую. */
+.albums.single .album-tick { display: none; }
 
 /* Поля в диалоге: последнее без отступа снизу, иначе кнопки отъезжают. */
 #ask-fields .field:last-child { margin-bottom: 0; }
@@ -500,14 +510,16 @@ body.has-conn { --conn-h: 37px; }
   font-size: 12px; color: var(--muted);
 }
 .conn-text { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
-/* Почта — главное в полоске: на узком экране первой ужимается приписка,
-   а не она. Иначе от «какой аккаунт» остаётся одна буква. */
+/* На узком экране первой ужимается почта, а не то, что справа от неё.
+   Обрезанная почта узнаётся по началу — аккаунт меняют раз в жизни; а справа
+   стоит имя альбома, то есть на кого снимаем, и оно меняется каждый день.
+   Оно же обычно короткое, так что до многоточия дело и не доходит. */
 #conn-email {
-  flex: 0 1 auto; min-width: 0; color: var(--text); font-weight: 550;
+  flex: 0 5 auto; min-width: 3em; color: var(--text); font-weight: 550;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 #conn-note {
-  flex: 0 8 auto; min-width: 0;
+  flex: 0 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .conn-fix {
