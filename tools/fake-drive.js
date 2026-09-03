@@ -73,6 +73,13 @@ export function fakeDrive({ latency = 0 } = {}) {
     async listProjects(homeId) {
       return [...folders.values()].filter(f => f.kind === 'album' && f.parent === homeId);
     },
+    async getFolder(id) { return folders.get(id) || null; },
+    async albumsFor(homeId, activeId) {
+      const inside = await drive.listProjects(homeId);
+      if (!activeId || inside.some(f => f.id === activeId)) return inside;
+      const active = await drive.getFolder(activeId);
+      return active ? [...inside, active] : inside;
+    },
     async rename(id, name) {
       const f = folders.get(id);
       if (f) f.name = name;

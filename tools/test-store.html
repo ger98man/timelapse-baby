@@ -300,6 +300,20 @@ run(async () => {
   check('в доме два альбома, а не четыре',
     (await fam.listProjects(home.id)).length === 2);
 
+  // Список, из которого выбирают ребёнка, — это содержимое выбранного дома,
+  // а не всё помеченное в Диске: чужая папка, к которой подключались когда-то,
+  // ребёнком в этом доме не становится.
+  const stranger = await fam.createRoot('Чужой малыш', 'someone-else');
+  const mine = await fam.albumsFor(home.id, alice.id);
+  check('чужой папки в списке нет', !mine.some(a => a.id === stranger.id),
+    mine.map(a => a.name).join(', '));
+  check('свои оба на месте', mine.length === 2);
+  // Кроме одного случая: в неё снимают прямо сейчас. Спрятать её значило бы
+  // не ответить на вопрос «кого снимаем».
+  const shared = await fam.albumsFor(home.id, stranger.id);
+  check('текущий альбом виден, даже лёжа снаружи',
+    shared.some(a => a.id === stranger.id) && shared.length === 3);
+
   await clearCache();
   await settings.merge({
     homeFolderId: null, baseFileId: null, profileFileId: null,

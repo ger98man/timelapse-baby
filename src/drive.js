@@ -235,6 +235,18 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     }
   }
 
+  /** Одна папка по id. null — удалили, отобрали доступ, не ответил Диск. */
+  async function getFolder(folderId) {
+    if (!folderId) return null;
+    try {
+      const f = await call(`${API}/files/${folderId}` +
+        '?fields=id,name,trashed,ownedByMe,parents,appProperties,owners(emailAddress)');
+      return f.trashed ? null : f;
+    } catch {
+      return null;
+    }
+  }
+
   /** Год или месяц — обычная папка внутри альбома, а не альбом. */
   const isNumbered = name => /^\d{1,4}$/.test((name || '').trim());
 
@@ -261,6 +273,23 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     const inside = await subFolders(homeId);
     const marked = inside.filter(f => f.appProperties && f.appProperties[ROOT]);
     return marked.length ? marked : inside.filter(f => !isNumbered(f.name));
+  }
+
+  /**
+   * Альбомы, между которыми человек выбирает: те, что лежат в выбранной
+   * главной папке. Плюс тот, в который он снимает прямо сейчас, если лежит он
+   * не там, — так бывает у второго родителя, которому дали доступ на папку
+   * одного ребёнка. Прятать её нельзя: список отвечает на вопрос «кого
+   * снимаем», и ответ обязан быть в нём виден.
+   *
+   * Всё остальное, что помечено меткой альбома в Диске, сюда не попадает:
+   * чужая папка, к которой подключались когда-то, — не ребёнок в этом доме.
+   */
+  async function albumsFor(homeId, activeId) {
+    const inside = await listProjects(homeId);
+    if (!activeId || inside.some(f => f.id === activeId)) return inside;
+    const active = await getFolder(activeId);
+    return active ? [...inside, active] : inside;
   }
 
   /** Заводит дом. Вызывается только по явному решению человека. */
@@ -597,7 +626,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   const adoptHome = folderId => mark(folderId, { [HOME]: '1', [ROOT]: null });
 
   return {
-    findRoot, findHome, parentHome, listRoots, listHomes, listProjects,
+    findRoot, findHome, parentHome, getFolder, listRoots, listHomes, listProjects, albumsFor,
     createRoot, createHome, nameHome, rename, folderKind, adoptRoot, adoptHome,
     folderForDay, putDayFile, updateProps,
     listDayFiles, listChildren, listTree, belongsToAlbum, download, trash, untrash,
