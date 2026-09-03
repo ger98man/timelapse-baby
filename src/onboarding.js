@@ -180,13 +180,17 @@ export function runOnboarding({ onToast = () => {} } = {}) {
       waiting('wiz-home-wait', null);
       $('wiz-home-choice').classList.add('hidden');
       appear($('wiz-home-ok'));
-      $('wiz-home-name').textContent = home || state.folderName;
+      // В карточке — только корневая папка. Её может не быть, и тогда так и
+      // написано: подставлять на её место альбом нельзя, иначе человек ищет
+      // в Диске не то и делится не тем.
+      const album = String(state.folderName || '').split(' — ')[0].trim();
+      $('wiz-home-name').textContent = home || 'Корневой папки нет';
       $('wiz-home-sub').textContent = home
         ? 'Здесь лежат альбомы всех детей'
-        : 'Общая папка одного ребёнка';
+        : `Вам открыли папку одного ребёнка — «${album}»`;
       $('wiz-home-text').textContent = home
         ? 'Всё, что вы снимете, будет складываться сюда.'
-        : 'Вам открыли папку одного ребёнка — снимать будете в неё.';
+        : 'Снимать будете в неё. Другие дети первого родителя вам не видны.';
       $('wiz-home-other').classList.toggle('hidden', !pickerReady());
       setNext('Дальше', true);
     }
@@ -261,12 +265,19 @@ export function runOnboarding({ onToast = () => {} } = {}) {
           state.folderName = '';
           await settings.merge({ driveFolderId: null, driveFolderName: '' });
         } else {
-          // Папка чужая, подпись на ней уже стоит — от владельца. Дома у неё
-          // для нас нет: доступ дали на одного ребёнка, а не на всех.
+          // Папка чужая, подпись на ней уже стоит — от владельца. Корневая
+          // может найтись сама: если доступ дали и на папку выше, это она и
+          // есть. Не видно — корневой у нас нет, и это законно: доступ дали
+          // на одного ребёнка, а не на всех.
           await drive.adoptRoot(folder.id);
-          state.homeId = null;
-          state.homeName = '';
-          await settings.merge({ homeFolderId: null, homeFolderName: '' });
+          const above = await drive.parentHome(folder.id);
+          if (above) await drive.adoptHome(above.id);
+          state.homeId = above ? above.id : null;
+          state.homeName = above ? above.name : '';
+          await settings.merge({
+            homeFolderId: state.homeId,
+            homeFolderName: state.homeName,
+          });
           await chooseAlbum({ id: folder.id, name: folder.name, ownedByMe: false });
         }
         showHome();

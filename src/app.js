@@ -481,13 +481,21 @@ function albumPath(cfg) {
  * в полоске она отвечает на вопрос «в чей Диск уезжает снимок», а у второго
  * родителя это единственное, что отличает свою папку от общей.
  *
- * Корня может не быть: второму родителю дают доступ на папку одного ребёнка.
- * Тогда честнее показать её саму, чем пустое место.
+ * Пусто — законный ответ: второму родителю могли открыть папку одного ребёнка,
+ * и корневой у него нет вовсе. Подставлять вместо неё альбом нельзя: там, где
+ * написано «корневая папка», должна стоять корневая папка, иначе человек ищет
+ * в Диске не то и делится не тем.
  */
 function homeLabel(cfg) {
-  return cfg.homeFolderId
-    ? (cfg.homeFolderName || 'Главная папка')
-    : (cfg.driveFolderName || '');
+  return cfg.homeFolderId ? (cfg.homeFolderName || 'Главная папка') : '';
+}
+
+/** Что писать про папку там, где корневой может не оказаться. */
+function folderLine(cfg) {
+  const home = homeLabel(cfg);
+  if (home) return home;
+  const album = folderLabel(cfg.driveFolderName);
+  return album ? `папка ребёнка «${album}»` : '';
 }
 
 /**
@@ -531,7 +539,7 @@ function renderConn() {
 
   // Вторая строка — про папку: в чей Диск уезжает снимок и насколько свежо
   // то, что показано на экране.
-  const home = homeLabel(state.cfg);
+  const home = folderLine(state.cfg);
   const second = $('conn-folder');
   second.textContent = home;
   $('conn-sync').textContent = home ? '· ' + syncLabel() : '';
@@ -840,11 +848,16 @@ async function pickShared(say = toast) {
   }
 
   await drive().adoptRoot(folder.id);
-  // Выбрали папку одного ребёнка — значит, корневой у нас теперь нет: доступ
-  // дали на него, а не на весь дом первого родителя. Оставить прежний корень
-  // означало бы показывать в полоске папку, к которой снимок отношения не
-  // имеет, и заводить следующего ребёнка не рядом с этим.
-  await settings.merge({ homeFolderId: null, homeFolderName: '' });
+  // Выбрали папку одного ребёнка — прежний корень к ней отношения не имеет.
+  // Но новый может найтись сам: если доступ дали и на папку выше, это она и
+  // есть, и вместе с ней видны остальные дети. Не видно — корневой у нас
+  // просто нет, и врать про неё нельзя.
+  const above = await drive().parentHome(folder.id);
+  if (above) await drive().adoptHome(above.id);
+  await settings.merge({
+    homeFolderId: above ? above.id : null,
+    homeFolderName: above ? above.name : '',
+  });
   // Дни прежней папки к этой не относятся: человек только что сказал,
   // какой альбом его, — остальное кэш, и он пересоберётся из папки.
   await store.switchProject(drive(), folder);
@@ -979,24 +992,32 @@ async function renderGoogleCard() {
   show('btn-google-connect', !connected);
   show('btn-google-off', connected);
 
-  // Эта карточка — про корневую папку целиком, а не про ребёнка: кого снимаем,
+  // Эта карточка — про корневую папку, и только про неё: кого снимаем,
   // спрашивают выше, в своей карточке. Имя показываем полное, с почтой
   // владельца: у второго родителя рядом с общей папкой лежит своя, и
   // отличаются они ровно этой припиской.
+  //
+  // Корневой может не быть — второму родителю открыли папку одного ребёнка.
+  // Подставлять на её место альбом нельзя: там, где написано «корневая
+  // папка», должна стоять корневая папка, иначе человек ищет в Диске не то.
+  const home = homeLabel(cfg);
+  const album = folderLabel(cfg.driveFolderName);
   const hasFolder = connected && Boolean(cfg.homeFolderId || cfg.driveFolderId);
   show('google-folder', connected);
-  $('google-folder-name').textContent = hasFolder
-    ? homeLabel(cfg)
-    : 'Папка не выбрана';
-  $('google-folder-name').title = hasFolder ? homeLabel(cfg) : '';
+  $('google-folder-name').textContent =
+    home || (album ? 'Корневой папки нет' : 'Папка не выбрана');
+  $('google-folder-name').title = home;
+  $('google-folder-sub').textContent = home
+    ? 'Здесь лежат альбомы всех детей'
+    : (album ? `Вам открыли папку одного ребёнка — «${album}»` : '');
 
   // Обновлять и открывать нечего, пока папки нет; выбрать — единственное,
   // что в этот момент имеет смысл, поэтому кнопка так и называется.
   show('btn-sync', hasFolder);
   show('drive-link', hasFolder);
   $('btn-pick-label').textContent = hasFolder ? 'Поменять' : 'Выбрать';
-  // Открываем ту же папку, что показана в карточке, — иначе Диск открывает
-  // не то, на что человек только что смотрел.
+  // Открываем ту же папку, что показана в карточке; корневой нет — открываем
+  // папку ребёнка, другой всё равно нет.
   const open = cfg.homeFolderId || cfg.driveFolderId;
   if (hasFolder) {
     $('drive-link').href = `https://drive.google.com/drive/folders/${open}`;
