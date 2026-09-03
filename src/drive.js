@@ -179,11 +179,15 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
    * выбирает, кого он сейчас снимает.
    */
   async function listRoots() {
-    return list(q([
+    const found = await list(q([
       `appProperties has { key='${ROOT}' and value='1' }`,
       `mimeType='${FOLDER_MIME}'`,
       'trashed=false',
     ]), FOLDER_FIELDS);
+    // Дом в списке альбомов — это предложение снимать в папку, где лежат
+    // папки детей. Метки теперь взаимоисключающие, но у тех, кто подключался
+    // прежними версиями, на доме могла остаться и метка альбома.
+    return found.filter(f => !(f.appProperties && f.appProperties[HOME]));
   }
 
   /** Дома, помеченные приложением. Свой должен быть один. */
@@ -318,11 +322,14 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
       props = f.appProperties || {};
     } catch { /* метаданные не показали — решим по содержимому */ }
     if (props[HOME]) return 'home';
-    if (props[ROOT]) return 'album';
 
+    // Метку альбома проверяем не первой, а последней: её могла поставить
+    // прежняя версия, которая про дома ещё не знала, — и тогда она врёт.
+    // Содержимое не врёт никогда.
     const inside = await subFolders(folderId);
     if (inside.some(f => f.appProperties && f.appProperties[ROOT])) return 'home';
     if (inside.some(f => isNumbered(f.name))) return 'album';
+    if (props[ROOT]) return 'album';
     if (!inside.length) return 'album';
 
     // Меток не видно, годов внутри тоже нет — значит, это либо дом с детьми,
@@ -583,8 +590,11 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     return folderId;
   }
 
-  const adoptRoot = folderId => mark(folderId, { [ROOT]: '1' });
-  const adoptHome = folderId => mark(folderId, { [HOME]: '1' });
+  // Метки взаимоисключающие: папка — либо дом, либо альбом. Снимаем чужую
+  // явно (null у Google значит «удалить свойство»), иначе папка, однажды
+  // помеченная старой версией не тем, так и осталась бы в обоих списках.
+  const adoptRoot = folderId => mark(folderId, { [ROOT]: '1', [HOME]: null });
+  const adoptHome = folderId => mark(folderId, { [HOME]: '1', [ROOT]: null });
 
   return {
     findRoot, findHome, parentHome, listRoots, listHomes, listProjects,

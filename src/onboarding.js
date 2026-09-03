@@ -422,7 +422,7 @@ export function runOnboarding({ onToast = () => {} } = {}) {
         $('wiz-account').classList.toggle('hidden', !has);
         if (has) {
           $('wiz-email').textContent = (await settings.get('driveEmail')) || '';
-          $('wiz-name').textContent = 'Аккаунт подключён';
+          $('wiz-account-name').textContent = 'Аккаунт подключён';
           $('wiz-avatar').style.display = 'none';
         }
         $('wiz-signin-error').textContent = '';
