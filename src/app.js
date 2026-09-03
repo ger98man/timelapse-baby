@@ -212,43 +212,6 @@ async function showThumb(slot, entry) {
   slot.insertBefore(canvas, slot.firstChild);
 }
 
-// --- значок на иконке ---------------------------------------------------------
-//
-// Единственное напоминание, которое приложение себе позволяет, и единственное,
-// которое ему по силам без сервера: точка на иконке. Ни push, ни уведомлений —
-// для них нужен чужой сервер, а его здесь нет и не будет.
-//
-// Работает только у приложения, добавленного на домашний экран: в обычной
-// вкладке рисовать значок негде. Поэтому включённая галочка при отсутствующем
-// Badging API — не ошибка, а «здесь этого не бывает», и так и написано.
-
-function badgingAvailable() {
-  return typeof navigator.setAppBadge === 'function';
-}
-
-const hourLabel = h => String(h).padStart(2, '0') + ':00';
-
-/**
- * Сверяет значок с положением дел. Зовётся отовсюду, где день мог смениться:
- * после отрисовки «Сегодня», при возврате из фона, при запуске.
- *
- * Час нужен затем, чтобы напоминание не начиналось с утра: день, не снятый в
- * девять утра, — это не пропущенный день, это ещё не наступивший вечер.
- */
-async function syncBadge() {
-  if (!badgingAvailable()) return;
-  try {
-    const on = state.cfg.remindBadge &&
-      new Date().getHours() >= state.cfg.reminderHour &&
-      !(await entries.get(D.todayKey()));
-    if (on) await navigator.setAppBadge(1);
-    else await navigator.clearAppBadge();
-  } catch {
-    // Система вправе отказать (не установлено на домашний экран, запрещено в
-    // настройках). Напоминание — не то, ради чего стоит показывать ошибку.
-  }
-}
-
 /** Есть ли откуда качать: папка подключена и сеть на месте. */
 function canPull() {
   return Boolean(configured() && state.cfg.driveEmail && navigator.onLine);
@@ -791,7 +754,6 @@ async function renderToday() {
   // серое поле с «сначала снимите» занимало экран и ничего не предлагало.
   $('today-comment').classList.toggle('hidden', !(entry && entry.fileId));
   renderStreak();
-  syncBadge();
 }
 
 async function renderStreak() {
@@ -1741,35 +1703,9 @@ function renderThemeCard() {
   }
 }
 
-/**
- * Карточка напоминания. Значок рисует система, поэтому в обычной вкладке его
- * не бывает — и об этом честнее сказать прямо, чем оставить галочку, которая
- * молча ничего не делает.
- */
-function renderRemindCard() {
-  const on = Boolean(state.cfg.remindBadge);
-  $('set-remind').checked = on;
-  $('set-remind-hour').value = String(state.cfg.reminderHour);
-  $('remind-hour').textContent = hourLabel(state.cfg.reminderHour);
-
-  const note = $('remind-note');
-  const can = badgingAvailable();
-  $('set-remind').disabled = !can;
-  // Час важен, только пока напоминание включено: выключенным он лишний ряд
-  // на экране, который ничего не делает.
-  $('remind-when').classList.toggle('hidden', !on || !can);
-  note.classList.toggle('hidden', can);
-  if (!can) {
-    note.textContent = 'В этом браузере значка на иконке не бывает. Он ' +
-      'появляется у приложения, добавленного на домашний экран, — на айфоне ' +
-      'это Safari, «Поделиться» → «На экран „Домой“».';
-  }
-}
-
 async function renderMore() {
   const cfg = state.cfg;
   await renderGoogleCard();
-  renderRemindCard();
   $('set-name').value = cfg.babyName || '';
   $('set-birth').value = cfg.birthDate || '';
   renderThemeCard();
@@ -2204,29 +2140,6 @@ function bind() {
     toast('Вы вышли из учётной записи Google');
   };
 
-  $('set-remind').onchange = async e => {
-    await settings.set('remindBadge', e.target.checked);
-    state.cfg = await settings.all();
-    renderRemindCard();
-    await syncBadge();
-    toast(e.target.checked
-      ? `Значок появится после ${hourLabel(state.cfg.reminderHour)}`
-      : 'Напоминание выключено');
-  };
-
-  // Ползунок ведёт подпись сразу, а сохраняется отпущенным: писать в базу на
-  // каждый пиксель протаскивания незачем.
-  $('set-remind-hour').oninput = e => {
-    $('remind-hour').textContent = hourLabel(Number(e.target.value));
-  };
-  $('set-remind-hour').onchange = async e => {
-    await settings.set('reminderHour', Number(e.target.value));
-    state.cfg = await settings.all();
-    // Час мог перешагнуть текущее время в любую сторону — значок пересобираем
-    // сразу, чтобы он не врал до следующего открытия «Сегодня».
-    await syncBadge();
-  };
-
   $('btn-export').onclick = async () => {
     const dates = await entries.allDates();
     if (!dates.length) { toast('Пока нечего выгружать'); return; }
@@ -2385,8 +2298,6 @@ async function boot() {
   // Возвращаются к нему — перепроверяем, чтобы галочка не врала.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    // Пока приложение лежало в фоне, мог смениться день и наступить вечер.
-    syncBadge();
     if (Date.now() - state.connAt < 300000) return;
     checkConnection();
   });
