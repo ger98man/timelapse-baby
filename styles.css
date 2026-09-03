@@ -163,6 +163,11 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 /* Имя папки подписано почтой владельца и переносить его негде — пусть рвётся
    где придётся, иначе оно вылезает за карточку. */
 .folder-card span { color: var(--text); font-weight: 550; font-size: 15px; overflow-wrap: anywhere; }
+/* Две строчки: главная папка и альбом внутри неё. */
+.folder-lines { display: flex; flex-direction: column; min-width: 0; }
+.folder-card .folder-sub {
+  margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--muted);
+}
 
 /* Папка в «Настройках»: сверху — куда всё уходит, снизу — что с этим можно
    сделать. Три действия про одну и ту же папку стояли тремя полосами во всю
@@ -217,6 +222,9 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; color: var(--muted);
 /* Поля в диалоге: последнее без отступа снизу, иначе кнопки отъезжают. */
 #ask-fields .field:last-child { margin-bottom: 0; }
 #ask-fields { margin-bottom: 14px; }
+/* Диалог спрашивает поверх всего, в том числе поверх окна «кто пришёл»:
+   у остальных наложений z-index общий, и вопрос оказывался под ними. */
+#ask { z-index: 32; }
 
 .steps { padding-left: 20px; margin: 10px 0 0; }
 .steps li { margin-bottom: 5px; }

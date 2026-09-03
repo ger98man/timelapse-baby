@@ -539,6 +539,7 @@ async function askWhoYouAre() {
       busy(true);
       try {
         const root = await createFirstAlbum();
+        if (!root) return;                 // передумали — окно остаётся
         toast(`Папка «${root.name}» создана`);
         resolve(true);
       } catch (e) {
@@ -638,13 +639,61 @@ async function ensureOwnHome() {
   return home.id;
 }
 
-/** Первый альбом: дом плюс папка ребёнка внутри него. */
+/**
+ * Первый альбом: дом плюс папка ребёнка внутри него.
+ *
+ * Имя и дату спрашиваем до создания, как и при заведении второго альбома:
+ * папку человек потом ищет в Диске глазами, и «Малыш» среди прочих папок
+ * ему ничего не говорит, а без даты рождения нечем считать дни.
+ *
+ * @returns {Promise<?{id:string,name:string}>} null — передумали
+ */
 async function createFirstAlbum() {
+  const got = await askAboutBaby(
+    `Главная папка появится в вашем Google Диске под именем ` +
+    `«${rootName(GOOGLE.folderName, state.cfg.driveEmail)}», а внутри неё — ` +
+    'папка ребёнка. Второй ребёнок потом ляжет рядом с первым.');
+  if (!got) return null;
+
   const homeId = await ensureOwnHome();
-  const root = await drive().createRoot(state.cfg.babyName || 'Малыш', homeId);
-  await settings.merge({ driveFolderId: root.id, driveFolderName: root.name });
+  const root = await drive().createRoot(got.name, homeId);
+  await settings.merge({
+    driveFolderId: root.id,
+    driveFolderName: root.name,
+    ...babyPatch(got),
+  });
   state.cfg = await settings.all();
   return root;
+}
+
+/**
+ * Имя и дата рождения — всё, что нужно знать про нового ребёнка. Один и тот
+ * же вопрос и для первого альбома, и для каждого следующего: заводят их
+ * в разных местах, а спрашивают одно и то же.
+ *
+ * @returns {Promise<?{name:string, birth:string}>} null — отменили
+ */
+async function askAboutBaby(text) {
+  const got = await ask({
+    title: 'Про кого снимаем',
+    text,
+    inputs: [
+      { key: 'name', label: 'Имя ребёнка', type: 'text' },
+      { key: 'birth', label: 'Дата рождения', type: 'date', value: D.todayKey() },
+    ],
+    yes: 'Завести',
+    danger: false,
+  });
+  if (!got) return null;
+  if (!got.name) { toast('Без имени папку не завести'); return null; }
+  if (!got.birth) { toast('Поставьте дату — от неё считаются дни'); return null; }
+  return got;
+}
+
+/** Дата в будущем — это ПДР: до родов приложение считает недели, а не дни. */
+function babyPatch(got) {
+  const future = D.diffDays(D.todayKey(), got.birth) > 0;
+  return { babyName: got.name, birthDate: got.birth, dueDate: future ? got.birth : null };
 }
 
 /**
@@ -1988,35 +2037,20 @@ async function newAlbum() {
     return toast(e.message || 'Диск не ответил — не понять, куда класть альбом');
   }
 
-  const got = await ask({
-    title: 'Новый альбом',
-    // Куда именно ляжет папка, человек должен знать до нажатия: у второго
-    // родителя это чужая общая папка, и разница между «рядом с первым
-    // ребёнком» и «отдельно у меня» — вся суть.
-    text: `Папка появится внутри «${home.name}»${home.id ? '' : ' — её заведу тут же'}. ` +
-          'Оформление и настройки видео перейдут из общих — вводить их заново не нужно.',
-    inputs: [
-      { key: 'name', label: 'Имя', type: 'text' },
-      { key: 'birth', label: 'Дата рождения', type: 'date', value: D.todayKey() },
-    ],
-    yes: 'Завести',
-    danger: false,
-  });
+  // Куда именно ляжет папка, человек должен знать до нажатия: у второго
+  // родителя это чужая общая папка, и разница между «рядом с первым ребёнком»
+  // и «отдельно у меня» — вся суть.
+  const got = await askAboutBaby(
+    `Папка появится внутри «${home.name}»${home.id ? '' : ' — её заведу тут же'}. ` +
+    'Оформление и настройки видео перейдут из общих — вводить их заново не нужно.');
   if (!got) return;
-  if (!got.name) return toast('Без имени папку не завести');
-  if (!got.birth) return toast('Поставьте дату — от неё считаются дни');
 
   progressOpen(`Завожу «${got.name}»`);
   try {
     const homeId = home.id ? await useHome(home) : await ensureOwnHome();
     const root = await drive().createRoot(got.name, homeId);
     await store.switchProject(drive(), root);
-    const future = D.diffDays(D.todayKey(), got.birth) > 0;
-    await settings.merge({
-      babyName: got.name,
-      birthDate: got.birth,
-      dueDate: future ? got.birth : null,
-    });
+    await settings.merge(babyPatch(got));
     state.cfg = await settings.all();
     await pushProfile(drive());
     freeUrls();
