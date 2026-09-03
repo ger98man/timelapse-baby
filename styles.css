@@ -525,6 +525,21 @@ body.has-conn { --conn-h: 37px; }
 ::view-transition-old(screen),
 ::view-transition-new(screen) { animation-duration: .18s; }
 
+/* Полоски переезжают под своими именами, а не в общем снимке страницы.
+   Безымянное браузер снимает целиком, одной картинкой во всю страницу, — а
+   высота у экранов разная: настройки втрое длиннее «Сегодня». Пока такой
+   снимок перетекает из одного размера в другой, полоска табов внутри него
+   уезжает вместе с ним и возвращается только к концу перехода: на экране это
+   читается как «меню на секунду пропало». Со своим именем каждая полоска
+   стоит там, где стояла, и переход её не касается. Меняется в них только цвет
+   активной вкладки — ему перетекать незачем. */
+.tabs { view-transition-name: tabbar; }
+.conn { view-transition-name: connbar; }
+::view-transition-old(tabbar),
+::view-transition-old(connbar) { animation: none; opacity: 0; }
+::view-transition-new(tabbar),
+::view-transition-new(connbar) { animation: none; opacity: 1; }
+
 #overlay-day:not(.hidden) .sheet { view-transition-name: sheet-day; }
 #overlay-align:not(.hidden) .align-wrap { view-transition-name: sheet-align; }
 #overlay-ghost:not(.hidden) .ghost-wrap { view-transition-name: sheet-ghost; }
