@@ -539,8 +539,11 @@ body.has-conn { --conn-h: 53px; }
   flex: 0 5 auto; min-width: 3em; color: var(--text); font-weight: 550;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Приписка не режется вовсе: она короткая и это единственная новость в
+   полоске — «нет сети, только просмотр» без последних слов бесполезно.
+   Место под неё отдаёт почта: аккаунт узнаётся и по началу. */
 #conn-note {
-  flex: 0 1 auto; min-width: 0;
+  flex: none; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .conn-fix {

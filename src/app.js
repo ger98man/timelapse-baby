@@ -336,6 +336,10 @@ function requireOnline() {
   return false;
 }
 
+// Записку из разметки держим отдельно: её подменяют на время, а вернуть
+// потом надо ровно ту, что была.
+const OFFLINE_NOTE = document.getElementById('offline-note').textContent;
+
 /** Блокирует всё, чем можно что-то изменить, пока нет сети. */
 function applyOnlineState() {
   const can = online();
@@ -347,6 +351,15 @@ function applyOnlineState() {
   $('today-comment').disabled = !can;
   $('day-comment').disabled = !can;
   $('offline-note').classList.toggle('hidden', can);
+  // Без сети да ещё и без корневой папки объяснять надо другое: снимать
+  // некуда не потому, что связи нет, а потому, что папка ещё не выбрана.
+  if (!can) {
+    $('offline-note').textContent = state.cfg.homeFolderId
+      ? OFFLINE_NOTE
+      : 'Нет сети, а папка в Google Диске ещё не выбрана — пока только ' +
+        'просмотр. Как только связь появится, приложение спросит, где её ' +
+        'завести, и снимать станет можно.';
+  }
 }
 
 /** Тихая попытка после съёмки: получилось — хорошо, нет — не мешаем. */
@@ -444,7 +457,10 @@ async function checkConnection() {
   const cfg = state.cfg;
   if (!configured()) return setConn('none', '', '');
   if (!cfg.driveEmail) return setConn('off', '', 'Google не подключён');
-  if (!navigator.onLine) return setConn('bad', cfg.driveEmail, 'нет сети');
+  // Без сети приложение только показывает: любая правка уезжает прямо в папку,
+  // а её сейчас нет. Об этом надо сказать в полоске, а не оставлять человека
+  // выяснять это по выключенным кнопкам.
+  if (!navigator.onLine) return setConn('bad', cfg.driveEmail, 'нет сети, только просмотр');
 
   const me = await pingGoogle();
   if (!me) return setConn('bad', cfg.driveEmail, 'нет доступа');
@@ -583,6 +599,33 @@ const PICKER_HINT =
  * появится свой пустой, он начнёт снимать туда и узнает об этом нескоро.
  * @returns {Promise<boolean>} появилась ли папка
  */
+/**
+ * Требует корневую папку — но только там, где её можно завести.
+ *
+ * Без сети окно было бы тупиком: ни создать, ни выбрать папку нельзя, а
+ * закрыть его нечем. Поэтому без сети пускаем внутрь на просмотр — календарь
+ * и прошлые дни лежат в кэше и читаются без Диска, а всё, чем можно что-то
+ * изменить, и так выключено, пока сети нет. Вопрос задаётся, как только
+ * связь появится.
+ *
+ * @returns {Promise<boolean>} есть ли теперь корневая папка
+ */
+async function requireHomeFolder() {
+  if (!configured() || !state.cfg.driveEmail) return false;
+  if (state.cfg.homeFolderId) return true;
+  if (!navigator.onLine) return false;
+
+  while (!(await ensureHomeFolder()) && !state.cfg.homeFolderId) {
+    // Ответить «нет» этому окну нельзя, но сеть могла пропасть прямо в нём —
+    // тогда выпускаем на просмотр, как и всех остальных без сети.
+    if (!navigator.onLine) return false;
+  }
+  // Корневая есть, а альбома в ней может не быть — спрашиваем сразу, а не
+  // при первой синхронизации: пустой экран «Сегодня» ничего не объясняет.
+  if (state.cfg.homeFolderId && !state.cfg.driveFolderId) await askWhoYouAre();
+  return Boolean(state.cfg.homeFolderId);
+}
+
 /**
  * Шлагбаум с папкой: показывает окно и ждёт, пока человек не решит.
  *
@@ -2928,19 +2971,9 @@ async function boot() {
   // войти уже зная, уедет ли снятое сегодня в общую папку.
   await runGate();
 
-  // Корневая папка обязана быть до того, как человек попадёт на экраны:
-  // без неё некуда складывать снимки и не из чего выбирать ребёнка. Окно
-  // не отпускает, пока папка не заведена или не выбрана.
-  if (configured() && state.cfg.driveEmail && !state.cfg.homeFolderId) {
-    while (!(await ensureHomeFolder()) && !state.cfg.homeFolderId) {
-      // Диск мог не ответить: не пускаем дальше, но и не крутим окно вхолостую
-      // без сети — там кнопки просто не сработают, и человек это увидит.
-      if (!navigator.onLine) break;
-    }
-    // Корневая есть, а альбома в ней может не быть — спрашиваем сразу, а не
-    // при первой синхронизации: пустой экран «Сегодня» ничего не объясняет.
-    if (state.cfg.homeFolderId && !state.cfg.driveFolderId) await askWhoYouAre();
-  }
+  // Корневая папка обязана быть до того, как человек попадёт на экраны: без
+  // неё некуда складывать снимки и не из чего выбирать ребёнка.
+  await requireHomeFolder();
 
   const now = new Date();
   state.calYear = now.getFullYear();
@@ -2971,7 +3004,11 @@ async function boot() {
 
   window.addEventListener('online', () => {
     applyOnlineState();
-    checkConnection().then(() => syncQuietly());
+    // Связь вернулась — самое время задать вопрос, который без неё задать
+    // было нельзя. Пока папки нет, синхронизировать всё равно нечего.
+    checkConnection()
+      .then(() => requireHomeFolder())
+      .then(() => syncQuietly());
   });
   window.addEventListener('offline', () => { applyOnlineState(); checkConnection(); });
 
