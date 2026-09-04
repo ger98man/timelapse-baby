@@ -2,6 +2,8 @@
 // Если MediaRecorder недоступен (старая iOS) — остаётся экспорт кадров в ZIP,
 // из которых видео собирается чем угодно.
 
+import { keepAwake } from './wake.js';
+
 const MIME_CANDIDATES = [
   'video/mp4;codecs=avc1.42E01E',
   'video/mp4',
@@ -128,17 +130,25 @@ export async function buildVideo(frames, opts, onProgress) {
     recorder.onerror = e => reject(e.error || new Error('Ошибка записи'));
   });
 
-  recorder.start();
-  await sleep(120); // дать рекордеру подхватить первый кадр
+  // Запись идёт в реальном времени и ровно столько, сколько длится видео, —
+  // всё это время человек на экран не нажимает. Погасшая подсветка означает,
+  // что канвас перестают перерисовывать, а рекордер пишет замерший кадр.
+  const wake = keepAwake();
+  try {
+    recorder.start();
+    await sleep(120); // дать рекордеру подхватить первый кадр
 
-  await playFrames(frames, canvas, fps, {
-    onFrame: i => onProgress && onProgress(i + 1, frames.length),
-  });
+    await playFrames(frames, canvas, fps, {
+      onFrame: i => onProgress && onProgress(i + 1, frames.length),
+    });
 
-  await sleep(Math.max(400, 1000 / fps * 4)); // подержать последний кадр
-  recorder.stop();
-  stream.getTracks().forEach(t => t.stop());
-  await finished;
+    await sleep(Math.max(400, 1000 / fps * 4)); // подержать последний кадр
+    recorder.stop();
+    stream.getTracks().forEach(t => t.stop());
+    await finished;
+  } finally {
+    wake();
+  }
 
   const blob = new Blob(chunks, { type: mime });
   const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';

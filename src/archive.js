@@ -12,6 +12,7 @@ import { describeFile } from './drive.js';
 import { eyesFromProp } from './store.js';
 import { CONFIG_NAME } from './profile.js';
 import { inLanes } from './pool.js';
+import { keepAwake } from './wake.js';
 
 const ts = iso => (iso ? Date.parse(iso) : 0);
 
@@ -78,6 +79,21 @@ function parseCsv(text) {
  * @returns {Promise<{zip: Blob, days: number, skipped: number}>}
  */
 export async function exportArchive(drive, onProgress) {
+  const wake = keepAwake();
+  try {
+    return await packArchive(drive, onProgress);
+  } finally {
+    wake();
+  }
+}
+
+/**
+ * Выгрузка минутами качает сотни файлов, и всё это время экран стоит без
+ * касаний. Погасший экран в фоне — это оборванные запросы и архив, который
+ * человек обнаружит недособранным. Поэтому тело вынесено отдельно, а замок
+ * снимается в любом случае.
+ */
+async function packArchive(drive, onProgress) {
   const dates = await entries.allDates();
   const cfg = await settings.all();
   const files = [];
@@ -204,7 +220,16 @@ export async function parseArchive(blob) {
  * Существующие дни не перезаписываются, если replace = false: так безопасно
  * сливать архивы двух телефонов.
  */
-export async function applyAlbum(drive, group, { replace = false } = {}, onProgress) {
+export async function applyAlbum(drive, group, opts = {}, onProgress) {
+  const wake = keepAwake();
+  try {
+    return await uploadAlbum(drive, group, opts, onProgress);
+  } finally {
+    wake();
+  }
+}
+
+async function uploadAlbum(drive, group, { replace = false } = {}, onProgress) {
   const dates = [...group.photos.keys()].sort();
   let added = 0, skipped = 0;
 
@@ -265,6 +290,15 @@ async function readAlbum(drive, albumId) {
  * @returns {Promise<{zip: Blob, days: number, skipped: number, albums: number}>}
  */
 export async function exportRoot(drive, albums, onProgress) {
+  const wake = keepAwake();
+  try {
+    return await packRoot(drive, albums, onProgress);
+  } finally {
+    wake();
+  }
+}
+
+async function packRoot(drive, albums, onProgress) {
   const files = [];
   let packed = 0, skipped = 0, done = 0;
 

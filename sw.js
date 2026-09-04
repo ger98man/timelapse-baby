@@ -33,6 +33,7 @@ const SHELL = [
   './src/align.js',
   './src/ghost.js',
   './src/video.js',
+  './src/wake.js',
   './src/zip.js',
   './src/archive.js',
   './icons/icon-192.png',
