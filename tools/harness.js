@@ -26,16 +26,28 @@ export function check(label, condition, detail = '') {
   row.textContent = label + (detail ? ` — ${detail}` : '');
   (box || out()).appendChild(row);
   checks++;
-  if (!condition) failures++;
+  if (!condition) {
+    failures++;
+    // Та же строка, что покраснела на странице, — в консоль: по ней tools/ci.py
+    // скажет, что именно не сошлось, а не просто «не сошлось».
+    console.log(`HARNESS bad ${row.textContent}`);
+  }
 }
 
-/** Итог внизу страницы. */
+/**
+ * Итог внизу страницы — и он же строкой в консоль.
+ *
+ * Строка нужна тому, у кого нет глаз: tools/ci.py открывает эти же страницы
+ * Chrome'ом без окна и ждёт именно её. Метка в начале — чтобы не выбирать
+ * итог из чужого шума, которого в консоли браузера всегда хватает.
+ */
 export function finish() {
   const s = document.getElementById('summary');
   s.className = failures ? 'fail' : 'pass';
   s.textContent = failures
     ? `Провалено проверок: ${failures} из ${checks}`
     : `Все проверки прошли (${checks})`;
+  console.log(`HARNESS ${failures ? 'fail' : 'pass'} ${failures} ${checks}`);
 }
 
 /**
@@ -48,6 +60,7 @@ export function run(body) {
     s.className = 'fail';
     s.textContent = 'Тест упал: ' + (e && e.message ? e.message : e);
     console.error(e);
+    console.log(`HARNESS crash ${e && e.message ? e.message : e}`);
   });
 }
 
