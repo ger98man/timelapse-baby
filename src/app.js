@@ -1,20 +1,25 @@
 import { entries, blobs, settings, DB_NAME } from './db.js';
 import * as D from './dates.js';
 import { formatBytes, loadImage, makeCanvas, canvasToBlob } from './img.js';
-import { drawAligned, renderSquareBlob } from './align.js';
+import { drawAligned, renderSquareBlob, refineEyes } from './align.js';
+import { keepAwake } from './wake.js';
 import { createGhostCamera, cameraError } from './ghost.js';
-import { buildVideo, videoSupported, pickMime, drawCaption } from './video.js';
+import { drawCaption } from './video.js';
 import { exportArchive, exportRoot, parseArchive, applyAlbum } from './archive.js';
 import { pushProfile } from './profile.js';
-import { createZip } from './zip.js';
 import { GOOGLE, configured, pickerReady } from '../config.js';
 import { runOnboarding } from './onboarding.js';
 import * as G from './google.js';
-import { createDrive, rootName } from './drive.js';
+import { rootName } from './drive.js';
 import * as store from './store.js';
 import { pickFolder } from './picker.js';
+import { $, url, freeUrls, toast, ask,
+         progressOpen, progressSet, progressClose, saveBlob } from './ui.js';
+import { state, drive, canPull, online, requireOnline } from './session.js';
+import { allDays, captionFor, drawFrame, framesToZip, player, playerStop,
+         playerToggle, refreshVideoInfo, renderVideo,
+         resetPlayer } from './screen-video.js';
 
-const $ = id => document.getElementById(id);
 
 // Сторона миниатюры, которую просим у Диска для показа. Столько же, сколько у
 // холста предпросмотра: одна ссылка обслуживает и карточку дня, и таймлапс.
@@ -23,157 +28,8 @@ const THUMB_VIEW = 540;
 // Сторона миниатюры для клетки календаря. Клетка на телефоне около 48 точек,
 // но экран у него тройной плотности — отсюда 160, а не 48.
 const CAL_THUMB = 160;
-const state = {
-  cfg: null,
-  calYear: 0,
-  calMonth: 0,
-  urls: [],          // объектные URL текущего экрана, чтобы не течь памятью
-  align: null,       // контекст оверлея разметки глаз
-  ghost: null,       // живая камера, пока открыт её оверлей
-  conn: { status: 'unknown', email: '', note: '' },   // связь с Google
-  connAt: 0,         // когда её проверяли в последний раз
-  syncing: false,    // читаем папку прямо сейчас — видно во второй строке
-  screen: null,      // какой экран открыт — чтобы знать, с какого уходим
-};
 
-// --- мелкие помощники -------------------------------------------------------
-
-function freeUrls() {
-  state.urls.forEach(URL.revokeObjectURL);
-  state.urls = [];
-}
-function url(blob) {
-  const u = URL.createObjectURL(blob);
-  state.urls.push(u);
-  return u;
-}
-
-let toastTimer;
-
-/**
- * @param {string} text
- * @param {number} ms сколько висеть
- * @param {?{label:string, run:Function}} action кнопка справа — для «Вернуть»
- */
-function toast(text, ms = 2600, action = null) {
-  const el = $('toast');
-  const btn = $('toast-action');
-  $('toast-text').textContent = text;
-  btn.classList.toggle('hidden', !action);
-  btn.textContent = action ? action.label : '';
-  btn.onclick = action
-    ? () => { el.classList.add('hidden'); clearTimeout(toastTimer); action.run(); }
-    : null;
-  el.classList.remove('hidden');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
-}
-
-/**
- * Свой диалог подтверждения вместо системного confirm().
- *
- * Системный ненадёжен: встроенные панели браузеров гасят его молча, а Chrome
- * после «блокировать диалоги на этой странице» навсегда возвращает «нет» —
- * и кнопка выглядит сломанной, хотя код отработал.
- *
- * @param {{inputs?:Array<{key:string,label:string,type?:string,value?:string}>}} opts
- *        inputs — диалог не подтверждает, а спрашивает: тогда «да» приносит
- *        объект с ответами, а не true. Отмена всегда false, чтобы у зовущего
- *        была одна проверка на оба случая.
- */
-function ask({ title, text = '', items = [], inputs = [],
-               yes = 'Удалить', no = 'Отмена', danger = true }) {
-  return new Promise(resolve => {
-    const box = $('ask');
-    $('ask-title').textContent = title;
-    $('ask-text').textContent = text;
-    $('ask-text').classList.toggle('hidden', !text);
-    // Список фактов о том, что сейчас произойдёт: собираем узлами, а не
-    // разметкой строкой — в значения попадают имя ребёнка и имя файла.
-    const list = $('ask-list');
-    list.textContent = '';
-    for (const [label, value] of items) {
-      const li = document.createElement('li');
-      const span = document.createElement('span');
-      const b = document.createElement('b');
-      b.textContent = label;
-      span.append(b, ' — ' + value);
-      li.append(span);
-      list.append(li);
-    }
-    list.classList.toggle('hidden', !items.length);
-
-    const fields = $('ask-fields');
-    fields.textContent = '';
-    const boxes = new Map();
-    for (const f of inputs) {
-      const label = document.createElement('label');
-      label.className = 'field';
-      const span = document.createElement('span');
-      span.textContent = f.label;
-      const input = document.createElement('input');
-      input.type = f.type || 'text';
-      input.value = f.value || '';
-      label.append(span, input);
-      fields.append(label);
-      boxes.set(f.key, input);
-    }
-    fields.classList.toggle('hidden', !inputs.length);
-
-    $('ask-yes').textContent = yes;
-    $('ask-yes').classList.toggle('btn-danger', danger);
-    $('ask-yes').classList.toggle('btn-primary', !danger);
-    $('ask-no').textContent = no;
-    box.classList.remove('hidden');
-
-    const close = answer => {
-      box.classList.add('hidden');
-      $('ask-yes').onclick = $('ask-no').onclick = box.onclick = null;
-      resolve(answer);
-    };
-    const answers = () => {
-      const out = {};
-      for (const [key, input] of boxes) out[key] = input.value.trim();
-      return out;
-    };
-    $('ask-yes').onclick = () => close(inputs.length ? answers() : true);
-    $('ask-no').onclick = () => close(false);
-    box.onclick = e => { if (e.target === box) close(false); };
-    if (inputs.length) boxes.values().next().value.focus();
-  });
-}
-
-function progressOpen(label) {
-  $('progress-label').textContent = label;
-  $('progress-fill').style.width = '0%';
-  $('progress-count').textContent = '';
-  $('progress').classList.remove('hidden');
-}
-function progressSet(done, total, label) {
-  if (label) $('progress-label').textContent = label;
-  const pct = total ? Math.round(done / total * 100) : 0;
-  $('progress-fill').style.width = pct + '%';
-  $('progress-count').textContent = total ? `${done} из ${total}` : '';
-}
-function progressClose() { $('progress').classList.add('hidden'); }
-
-async function saveBlob(blob, filename, title = filename) {
-  const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title });
-      return 'shared';
-    } catch (e) {
-      if (e && e.name === 'AbortError') return 'cancelled';
-    }
-  }
-  const u = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = u; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(u), 60000);
-  return 'downloaded';
-}
+// --- показ снимков ----------------------------------------------------------
 
 /**
  * Что показывать человеку. С отмеченными глазами — выровненный кадр: на экране
@@ -243,11 +99,6 @@ async function showThumb(slot, entry) {
   slot.insertBefore(canvas, slot.firstChild);
 }
 
-/** Есть ли откуда качать: папка подключена и сеть на месте. */
-function canPull() {
-  return Boolean(configured() && state.cfg.driveEmail && navigator.onLine);
-}
-
 /**
  * Подтягивает комментарий, если его правили с другого телефона. Он крошечный,
  * поэтому его ждут на месте, а не подменяют текст под руками у человека.
@@ -277,11 +128,6 @@ async function pullBody(key, { silent = true } = {}) {
 }
 
 // --- Google -----------------------------------------------------------------
-
-/** Диск создаётся лениво: без интернета и без токена он и не нужен. */
-function drive() {
-  return createDrive({ getToken: opts => G.getAccessToken({ interactive: false, ...opts }) });
-}
 
 /** Обновление из папки — с прогрессом и внятным итогом. */
 async function runSync() {
@@ -321,21 +167,6 @@ async function runSync() {
   }
 }
 
-/**
- * Любая правка уезжает прямо в общую папку, поэтому без сети её делать нельзя:
- * иначе два телефона расходятся, и потом непонятно, чья версия настоящая.
- * Пока Диск не подключён, приложение работает локально и это правило не нужно.
- */
-function online() {
-  return !state.cfg.driveEmail || navigator.onLine;
-}
-
-function requireOnline() {
-  if (online()) return true;
-  toast('Нет сети. Снимите обычной камерой и добавьте кадр из галереи позже', 4200);
-  return false;
-}
-
 // Записку из разметки держим отдельно: её подменяют на время, а вернуть
 // потом надо ровно ту, что была.
 const OFFLINE_NOTE = document.getElementById('offline-note').textContent;
@@ -350,6 +181,8 @@ function applyOnlineState() {
   }
   $('today-comment').disabled = !can;
   $('day-comment').disabled = !can;
+  // У этой кнопки два условия, а не одно: сеть и хотя бы два размеченных дня.
+  $('btn-retouch').disabled = !can || state.marked < 2;
   $('offline-note').classList.toggle('hidden', can);
   // Без сети да ещё и без корневой папки объяснять надо другое: снимать
   // некуда не потому, что связи нет, а потому, что папка ещё не выбрана.
@@ -409,13 +242,6 @@ const ICON_OK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.
   'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // Плей и стоп для кнопки у дат: одна кнопка, два состояния — «показать» и
 // «хватит», третьего у неё нет.
-const ICON_PLAY = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
-  '<path d="M8 5.2v13.6L19 12z" fill="currentColor" stroke="currentColor" ' +
-  'stroke-width="2.4" stroke-linejoin="round"/></svg>';
-const ICON_STOP = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
-  '<path d="M7.6 7.6h8.8v8.8h-8.8z" fill="currentColor" stroke="currentColor" ' +
-  'stroke-width="2.4" stroke-linejoin="round"/></svg>';
-
 const ICON_BAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" ' +
   'fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>';
 
@@ -1682,14 +1508,54 @@ async function openAlign(key) {
   // День ещё не размечали — подставляем вчерашние точки. Снимки изо дня в день
   // похожи, поэтому обычно они уже стоят там, где надо, и остаётся проверить.
   // Сохранится всё равно только то, что человек подтвердил кнопкой.
-  const eyes = entry.eyes || await store.eyesBefore(key);
+  const guess = entry.eyes ? { eyes: entry.eyes, pack: null } : await store.eyeGuess(key);
+  const eyes = entry.eyes || guess.eyes;
   const guessed = !entry.eyes && Boolean(eyes);
 
-  state.align = { key, entry, guessed,
+  state.align = { key, entry, guessed, refined: false, touched: false,
                   l: eyes ? { x: eyes.lx, y: eyes.ly } : null,
                   r: eyes ? { x: eyes.rx, y: eyes.ry } : null, drag: null };
   drawDots();
   await overlay('overlay-align', true);
+  if (guessed && guess.pack) refineGuess(key, img, guess.pack);
+}
+
+/**
+ * Доводит подставленные точки до глаз — поиском вчерашних кусочков кадра на
+ * сегодняшнем снимке.
+ *
+ * Считается уже после того, как лист открылся: полсекунды ожидания ради
+ * подсказки человек не заказывал, а точки на экране и так стоят. Найдётся —
+ * сдвинутся сами; не найдётся — останутся вчерашними, как и были.
+ *
+ * Тронул точки пальцем — уточнение молчит: поправка руками главнее любой
+ * подсказки, и отобрать её обратно было бы предательством.
+ */
+async function refineGuess(key, img, pack) {
+  if (!img.complete) {
+    await new Promise(res => { img.addEventListener('load', res, { once: true });
+                               img.addEventListener('error', res, { once: true }); });
+  }
+  const busy = () => {
+    const a = state.align;
+    return !a || a.key !== key || a.touched || !a.l || !a.r;
+  };
+  if (busy() || !img.naturalWidth) return;
+
+  const a = state.align;
+  let got = null;
+  try {
+    got = refineEyes(pack, {
+      src: img, w: img.naturalWidth, h: img.naturalHeight,
+      eyes: { lx: a.l.x, ly: a.l.y, rx: a.r.x, ry: a.r.y },
+    });
+  } catch { return; }
+  if (!got || busy()) return;
+
+  state.align.l = { x: got.lx, y: got.ly };
+  state.align.r = { x: got.rx, y: got.ry };
+  state.align.refined = true;
+  drawDots();
 }
 
 function drawDots() {
@@ -1704,6 +1570,7 @@ function drawDots() {
   $('align-hint').textContent = !a.l
     ? 'Ткните в правый глаз ребёнка (тот, что слева на фото).'
     : !a.r ? 'Теперь во второй глаз.'
+    : a.refined ? 'Точки нашлись по вчерашнему кадру. Проверьте — и сохраняйте.'
     : a.guessed ? 'Точки стоят как вчера. Поправьте, если сместились, — и сохраняйте.'
     : 'Точки можно двигать пальцем. Готово — и кадр встанет как надо.';
 }
@@ -1732,6 +1599,10 @@ function bindAlignStage() {
     else if (!a.l) { a.l = p; }
     else if (!a.r) { a.r = p; }
     else return;
+
+    // Дальше точки принадлежат пальцу: подсказка, доехавшая позже, их не тронет.
+    a.touched = true;
+    a.refined = false;
 
     if (a.drag) stage.setPointerCapture(e.pointerId);
     drawDots();
@@ -1773,355 +1644,62 @@ async function saveAlign() {
   toast('Кадр выровнен');
 }
 
-// --- видео ------------------------------------------------------------------
-
-/** Дни выбранного промежутка, у которых в папке есть снимок. */
-async function videoDays() {
-  const from = $('video-from').value || '0000-01-01';
-  const to = $('video-to').value || '9999-12-31';
-  const rows = await entries.range(from, to);
-  return rows.filter(r => r.fileId).map(r => r.date);
-}
-
-/** Все дни альбома, у которых есть снимок. */
-async function allDays() {
-  const rows = await entries.range('0000-01-01', '9999-12-31');
-  return rows.filter(r => r.fileId).map(r => r.date);
-}
+// --- уточнение разметки -----------------------------------------------------
 
 /**
- * Кадры для сборки. Здесь и только здесь качается вся история целиком: видео
- * иначе не собрать. Зато человек платит за это осознанно — нажав кнопку, а не
- * открыв приложение.
+ * Проход по альбому, который доводит разметку прошлых дней до глаз.
  *
- * Кадры ложатся на верстак, а не в память вкладки: год оригиналов вместе с
- * год выровненных кадров телефон не удержит. Верстак стирается при уходе с
- * экрана — store.clearBench().
+ * Дело это не быстрое и не бесплатное: качаются все снимки альбома, а
+ * поправленные дни уезжают в папку по одному. Поэтому спрашиваем до, а не
+ * после, и теми же числами, что и перед сборкой видео.
  */
-async function framesForBuild(days) {
-  if (!days) days = await videoDays();
-  if (!days.length) return [];
-
-  const puller = canPull() ? drive() : null;
-  const pending = await store.pendingFrames(days);
-  if (pending && !puller) {
-    toast(`Без сети собираю из ${days.length - pending} загруженных кадров`, 3600);
-  }
-  if (pending && puller) progressOpen('Готовлю кадры');
-
-  const { frames, missing } = await store.buildFrames(puller, days,
-    { onProgress: (d, t, label) => progressSet(d, t, label) });
-  progressClose();
-
-  if (state.cfg.videoCaption) {
-    for (const frame of frames) frame.caption = captionFor(frame.date);
+async function retouchAlbum() {
+  if (!requireOnline()) return;
+  const rows = (await entries.range('0000-01-01', '9999-12-31'))
+    .filter(r => r.fileId && r.eyes);
+  if (rows.length < 2) {
+    toast('Уточнять пока нечего: размеченных дней меньше двух');
+    return;
   }
 
-  if (missing && puller) {
-    toast(`Не удалось загрузить ${missing} ${D.plural(missing, 'кадр', 'кадра', 'кадров')}`);
-  }
-  return frames;
-}
-
-/**
- * Что выжигать в кадр. Тот же счётчик, что и в заголовке «Сегодня»: «День 47»
- * после родов, «За 30 дней до встречи» до них. Без даты рождения счётчика нет
- * — тогда и подписывать нечем, и чекбокс не показывается.
- */
-function captionFor(date) {
-  return D.dayLabel(date, state.cfg).label;
-}
-
-async function refreshVideoInfo() {
-  const days = await videoDays();
-  const fps = Number($('video-fps').value);
-  const secs = days.length / fps;
-  $('video-info').textContent = days.length
-    ? `${days.length} ${D.plural(days.length, 'кадр', 'кадра', 'кадров')} · примерно ${secs.toFixed(1)} с`
-    : 'В этом промежутке ещё нет кадров.';
-  $('btn-render').disabled = !days.length;
-  $('btn-preview').disabled = !days.length;
-
-  // Обещать сборку там, где браузер её не умеет, нечестно: кнопка всё равно
-  // ответила бы отказом. Убираем её и объясняем, чем собрать вместо неё.
-  const canRecord = videoSupported();
-  $('btn-render').classList.toggle('hidden', !canRecord);
-  $('video-unsupported').classList.toggle('hidden', canRecord);
-}
-
-/** @param {boolean} playing Идёт ли показ: от этого вся разница в кнопке. */
-function setPlayButton(playing) {
-  const b = $('btn-preview');
-  b.innerHTML = playing ? ICON_STOP : ICON_PLAY;
-  b.setAttribute('aria-label', playing ? 'Остановить' : 'Посмотреть');
-}
-
-/**
- * Проигрыватель предпросмотра.
- *
- * Кадры — миниатюры из Диска, поэтому весь ряд помещается в памяти и можно
- * не «проигрывать поток», а просто рисовать нужный кадр: отсюда и пауза, и
- * перемотка в любое место, чего у прежнего показа не было.
- */
-// Декодированный кадр 540×540 — это больше мегабайта сверх самой миниатюры.
-// Год таких в памяти не держат, поэтому вокруг текущего места оставляем окно,
-// а остальное отпускаем: пролистнули назад — декодируется заново, это дёшево.
-const PLAYER_WINDOW = 24;
-
-const player = {
-  frames: [],        // [{date, url, eyes}] по порядку
-  images: new Map(),  // date -> HTMLImageElement, декодируем по требованию
-  i: 0,
-  playing: false,
-  timer: null,
-  key: '',           // какой промежуток загружен: сменился — перезагружаем
-};
-
-function playerStop() {
-  player.playing = false;
-  clearTimeout(player.timer);
-  player.timer = null;
-  setPlayButton(false);
-  setOverlay('play');
-}
-
-/**
- * Значок поверх кадра. Во время показа над видео не должно быть ничего:
- * таймлапс идёт секунды, и кружок посреди лица успевает только помешать.
- * @param {?string} kind 'play' — приглашение нажать; null — чистый кадр
- */
-function setOverlay(kind) {
-  $('video-overlay').className = 'video-overlay' + (kind ? ' ' + kind : ' hidden');
-}
-
-/**
- * Миниатюру грузим обычной картинкой: скачать её запросом нельзя — сервер
- * картинок Google не отдаёт заголовок CORS. Рисовать это на холсте можно,
- * читать холст обратно — нет, но предпросмотру и не нужно: файл собирается
- * из оригиналов, а не отсюда.
- */
-function imageFor(frame) {
-  let img = player.images.get(frame.date);
-  if (img) return img;
-  img = new Image();
-  img.src = frame.url;
-  player.images.set(frame.date, img);
-  return img;
-}
-
-async function drawFrame(i) {
-  const frame = player.frames[i];
-  if (!frame) return;
-  player.i = i;
-  const canvas = $('video-canvas');
-  const ctx = canvas.getContext('2d');
-  const img = imageFor(frame);
-  if (!img.complete) {
-    await new Promise(res => { img.onload = res; img.onerror = res; });
-  }
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (img.naturalWidth) {
-    // Тот же расчёт, что и у настоящего кадра: глаза встают на своё место,
-    // поэтому предпросмотр показывает именно то, что окажется в файле.
-    drawAligned(ctx, img, img.naturalWidth, img.naturalHeight,
-      canvas.width, frame.eyes, state.cfg.eyeTarget);
-    if (state.cfg.videoCaption) {
-      drawCaption(ctx, captionFor(frame.date), canvas.width);
-    }
-  }
-  $('video-seek').value = String(i);
-  $('video-pos').textContent = D.formatLong(frame.date).replace(/ \d{4}$/, '');
-  // Следующий кадр начинаем грузить заранее: иначе на первом показе темп плывёт.
-  if (player.frames[i + 1]) imageFor(player.frames[i + 1]);
-  trimImages(i);
-}
-
-/** Отпускает кадры за пределами окна — иначе год показа съедает всю память. */
-function trimImages(i) {
-  if (player.images.size <= PLAYER_WINDOW * 2 + 2) return;
-  const keep = new Set();
-  for (let k = i - PLAYER_WINDOW; k <= i + PLAYER_WINDOW; k++) {
-    const frame = player.frames[k];
-    if (frame) keep.add(frame.date);
-  }
-  for (const date of [...player.images.keys()]) {
-    if (!keep.has(date)) player.images.delete(date);
-  }
-}
-
-function playerPlay() {
-  if (!player.frames.length) return;
-  // Досмотрели до конца — следующий пуск начинает сначала.
-  if (player.i >= player.frames.length - 1) player.i = 0;
-  player.playing = true;
-  setPlayButton(true);
-  setOverlay(null);
-  const step = async () => {
-    if (!player.playing) return;
-    await drawFrame(player.i);
-    if (player.i >= player.frames.length - 1) { playerStop(); return; }
-    player.timer = setTimeout(() => { player.i++; step(); },
-      1000 / Number($('video-fps').value));
-  };
-  step();
-}
-
-function playerToggle() {
-  if (!player.frames.length) return previewVideo();
-  if (player.playing) playerStop(); else playerPlay();
-}
-
-/**
- * Предпросмотр идёт по миниатюрам Google: посмотреть год так стоит мегабайта
- * вместо сотни. Оригиналы качаются только за настоящим файлом — там качество
- * решает, здесь достаточно узнать лицо в квадрате 400×400.
- */
-async function previewVideo() {
-  const days = await videoDays();
-  if (!days.length) return;
-  if (!canPull()) { toast('Нет сети — предпросмотр не из чего собрать'); return; }
-
-  const key = days.join(',');
-  if (key !== player.key) {
-    let frames = [];
-    try {
-      frames = await store.previewFrames(drive(), days);
-    } catch (e) {
-      toast(e.message || 'Не удалось получить кадры для предпросмотра');
-    }
-    if (!frames.length) { toast('Кадры для предпросмотра не приехали'); return; }
-    player.frames = frames;
-    player.images.clear();
-    player.key = key;
-    player.i = 0;
-  }
-
-  $('video-result').classList.add('hidden');
-  $('video-canvas').classList.remove('hidden');
-  $('video-track').classList.remove('hidden');
-  $('video-seek').max = String(player.frames.length - 1);
-  await drawFrame(player.i);
-  playerPlay();
-}
-
-/** Промежуток или скорость поменялись — показанное больше не про них. */
-function resetPlayer() {
-  playerStop();
-  player.frames = [];
-  player.images.clear();
-  player.key = '';
-  player.i = 0;
-  $('video-track').classList.add('hidden');
-  $('video-overlay').classList.add('hidden');
-  const canvas = $('video-canvas');
-  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-}
-
-/**
- * Что будет, если нажать «Скачать». Сборка идёт в реальном времени и на
- * телефоне, файл выходит увесистый — человеку честнее знать это до того, как
- * экран на полминуты займёт полоска прогресса.
- *
- * Числа приблизительные и такими названы: длительность считается точно, а
- * размер зависит от того, насколько кодек сожмёт конкретные кадры.
- * @returns {Promise<boolean>} согласился ли человек
- */
-async function confirmRender(days) {
-  const pending = await store.pendingFrames(days);
-  const fps = Number($('video-fps').value);
-  // Столько же, сколько добавляет buildVideo: разгон рекордера и удержание
-  // последнего кадра, иначе таймлапс обрывается на полуслове.
-  const hold = Math.max(0.4, 4 / fps);
-  const secs = days.length / fps + hold + 0.12;
-  const ext = (pickMime() || '').startsWith('video/mp4') ? 'mp4' : 'webm';
-  const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${ext}`;
-  // Тот же битрейт, с которым пишет buildVideo: 8 Мбит/с ≈ 1 МБ на секунду.
-  const bytes = 8_000_000 / 8 * secs;
-  const shares = Boolean(navigator.canShare && navigator.canShare({
-    files: [new File([new Blob()], name, { type: `video/${ext}` })],
-  }));
-
-  return ask({
-    title: 'Собрать и скачать видео',
-    text: 'В отличие от предпросмотра, файл собирается из настоящих ' +
-      'фотографий: они скачаются из папки, проиграются по одной и запишутся ' +
-      'в видео. На телефоне ничего из этого не останется.',
+  const ok = await ask({
+    title: 'Уточнить разметку по альбому',
+    text: 'Приложение пройдёт дни по порядку и поищет глаза каждого дня по ' +
+      'кусочку предыдущего кадра. Далеко от поставленного вами точка не ' +
+      'уйдёт: не нашлось — день останется как есть.',
     items: [
-      ['Кадров', `${days.length} · видео примерно на ${secs.toFixed(1)} с` +
-        (pending ? ` · скачаю ${pending} из папки` : '')],
-      ['Файл', `${name}, примерно ${formatBytes(bytes)}`],
-      ['Куда', shares
-        ? 'телефон спросит сам — можно сохранить или сразу отправить'
-        : 'в папку «Загрузки»'],
-      ['Сколько ждать', `примерно ${Math.ceil(secs + 1)} с — ` +
-        'приложение должно оставаться открытым'],
+      ['Дней', `${rows.length} — все размеченные`],
+      ['Что скачается', 'все снимки альбома, по одному разу'],
+      ['Что изменится', 'координаты глаз в папке; сами снимки не трогаются'],
+      ['Сколько ждать', 'минуты — приложение должно оставаться открытым'],
     ],
-    yes: 'Скачать',
+    yes: 'Уточнить',
     no: 'Не сейчас',
     danger: false,
   });
-}
+  if (!ok) return;
 
-async function renderVideo() {
-  const days = await videoDays();
-  if (!days.length) return;
-  if (!videoSupported()) {
-    toast('Этот браузер не умеет записывать видео — выгрузите кадры в ZIP');
-    return;
-  }
-  if (!await confirmRender(days)) return;
-
-  const frames = await framesForBuild();
-  if (!frames.length) return;
-  progressOpen('Собираю видео');
+  const wake = keepAwake();
+  progressOpen('Уточняю разметку');
   try {
-    const fps = Number($('video-fps').value);
-    const { blob, ext } = await buildVideo(frames, { fps, size: state.cfg.videoSize },
-      (d, t) => progressSet(d, t, 'Собираю видео'));
-    const v = $('video-result');
-    v.src = url(blob);
-    v.classList.remove('hidden');
-    $('video-canvas').classList.add('hidden');
-    // Кнопка обещала «скачать», а не «подождите вторую кнопку»: окно прогресса
-    // закрываем и сразу отдаём файл — иначе поверх него откроется «Поделиться».
+    const got = await store.retouchEyes(drive(),
+      { onProgress: (d, t, label) => progressSet(d, t, label) });
     progressClose();
-    const name = `${state.cfg.babyName || 'timelapse'}-${D.todayKey()}.${ext}`;
-    if (await saveBlob(blob, name) === 'downloaded') toast('Файл сохранён в «Загрузки»');
-    // Оригиналы качались только ради этого файла — держать в памяти
-    // мегабайты после того, как он готов, незачем.
-    await blobs.clear();
+    const parts = [`поправлено ${got.moved} ${D.plural(got.moved, 'день', 'дня', 'дней')}`];
+    if (got.kept) parts.push(`${got.kept} остались как были`);
+    if (got.missed) parts.push(`${got.missed} не удалось прочитать`);
+    toast(parts.join(', '), 4200);
+    freeUrls();
+    await renderToday();
+    await renderCalendar();
   } catch (e) {
-    toast(e.message || 'Не удалось собрать видео');
-  } finally {
     progressClose();
+    toast(e.message || 'Не удалось уточнить разметку');
+  } finally {
+    wake();
+    await blobs.clear();
+    await store.clearBench().catch(() => {});
   }
-}
-
-/**
- * @param {string[]} [days] Дни для выгрузки. Без них — выбранный на «Видео»
- *   промежуток; из «Настроек» приходит весь альбом целиком.
- */
-async function framesToZip(days) {
-  const frames = await framesForBuild(days);
-  if (!frames.length) { toast('Пока нет ни одного кадра'); return; }
-  progressOpen('Пакую кадры');
-  const files = frames.map((f, i) => ({
-    name: `frames/${String(i + 1).padStart(4, '0')}_${f.date}.jpg`,
-    data: f.blob,
-  }));
-  // Скорость в команде — та, что выставлена ползунком: иначе собранное по
-  // подсказке видео шло бы не в том темпе, который человек только что выбрал.
-  const fps = Number($('video-fps').value);
-  files.push({
-    name: 'frames/КАК-СОБРАТЬ.txt',
-    data: 'Кадры уже выровнены по глазам и пронумерованы по порядку.\n\n' +
-          'Собрать видео из них можно одной командой:\n\n' +
-          `  ffmpeg -framerate ${fps} -pattern_type glob -i "*.jpg" ` +
-          '-c:v libx264 -pix_fmt yuv420p timelapse.mp4\n',
-  });
-  const zip = await createZip(files, (d, t) => progressSet(d, t));
-  progressClose();
-  await saveBlob(zip, `kadry-${D.todayKey()}.zip`);
 }
 
 // --- настройки --------------------------------------------------------------
@@ -2365,7 +1943,22 @@ async function renderMore() {
       : `Последняя выгрузка ${days} ${D.plural(days, 'день', 'дня', 'дней')} назад.`;
   }
 
+  await renderRetouchCard();
   await renderStorageCard(total);
+}
+
+/**
+ * Проход по альбому имеет смысл, когда дней уже несколько: на двух он ничего
+ * не выровняет, а времени и трафика попросит как на всех.
+ */
+async function renderRetouchCard() {
+  const marked = (await entries.range('0000-01-01', '9999-12-31'))
+    .filter(r => r.fileId && r.eyes).length;
+  state.marked = marked;
+  $('retouch-status').textContent = marked < 2
+    ? 'Размеченных дней пока меньше двух — уточнять нечего.'
+    : `Размеченных дней: ${marked}.`;
+  applyOnlineState();
 }
 
 /**
@@ -2806,6 +2399,8 @@ function bind() {
     await renderGoogleCard();
     toast('Вы вышли из учётной записи Google');
   };
+
+  $('btn-retouch').onclick = retouchAlbum;
 
   $('btn-export').onclick = async () => {
     const dates = await entries.allDates();

@@ -36,6 +36,10 @@ run(async () => {
     driveFolderId: 'root', videoSize: 200, babyName: '', birthDate: null,
     homeFolderId: null, homeFolderName: 'Timelapse', baseFileId: null,
     profileFileId: null, driveFolderName: '', theme: 'girl',
+    // Кусочки глаз переживают clearCache — они в настройках, не в кэше.
+    // От прошлого прогона осталась бы пачка с более поздним днём, а её
+    // приложение справедливо считает свежее и не даёт затереть.
+    eyePatch: null,
   });
   const drive = fakeDrive();
 
@@ -90,6 +94,25 @@ run(async () => {
     (await store.eyesBefore('2026-09-11')) === null);
   check('до первого размеченного дня подставлять нечего',
     (await store.eyesBefore('2026-09-10')) === null);
+
+  caseOf('И кусочками кадра, чтобы точки довелись сами');
+  const guess = await store.eyeGuess('2026-09-12');
+  check('точки те же, что у eyesBefore', Math.abs(guess.eyes.lx - 0.41) < 1e-4);
+  check('пачка снята с последнего размеченного дня',
+    Boolean(guess.pack) && guess.pack.date === '2026-09-11', String(guess.from));
+  check('в пачке два кусочка', guess.pack.l.length === guess.pack.r.length &&
+    guess.pack.l.length === (guess.pack.radius * 2 + 1) ** 2);
+  check('в папку кусочки не уходят',
+    ![...drive.files.values()].some(f =>
+      JSON.stringify(f.appProperties || {}).includes('eyePatch')));
+  // Уточнять по чужому альбому нельзя: искали бы кусочки одного ребёнка на
+  // снимке другого — и нашли бы что-нибудь.
+  const myPack = await settings.get('eyePatch');
+  await settings.set('eyePatch', { ...myPack, folderId: 'somebody-else' });
+  check('пачка из другого альбома не годится',
+    (await store.eyeGuess('2026-09-12')).pack === null);
+  await settings.set('eyePatch', myPack);
+  check('своя — годится снова', Boolean((await store.eyeGuess('2026-09-12')).pack));
 
   caseOf('Показ идёт по миниатюрам Диска');
   drive.downloads.length = 0;
@@ -361,6 +384,49 @@ run(async () => {
   check('сменили композицию — верстак тоже негоден',
     (await store.pendingFrames(days)) === days.length);
   await settings.merge({ eyeTarget: { lx: 0.375, ly: 0.42, rx: 0.625, ry: 0.42 } });
+
+  caseOf('Проход по альбому сцепляет дни друг с другом');
+  // Снимок один и тот же во все дни, а разметку каждый день ставили заново и
+  // каждый день промахивались по-своему. Именно этот разнобой и виден в
+  // готовом видео мелкой дрожью; проход обязан его собрать.
+  const TRUTH = { lx: 0.295, ly: 0.395, rx: 0.705, ry: 0.395 };
+  const shake = [0, 0.012, -0.010, 0.008, -0.006, 0.011];
+  for (let i = 0; i < days.length; i++) {
+    await store.putEyes(many, days[i], {
+      lx: TRUTH.lx + shake[i], ly: TRUTH.ly,
+      rx: TRUTH.rx + shake[i], ry: TRUTH.ry,
+    });
+  }
+  const spread = async () => {
+    const xs = [];
+    for (const d of days) xs.push((await entries.get(d)).eyes.lx);
+    return Math.max(...xs) - Math.min(...xs);
+  };
+  const before = await spread();
+  await blobs.clear();
+  const pass = await store.retouchEyes(many);
+  const after = await spread();
+  check('дни разъезжались на глаз шириной', before > 0.02, before.toFixed(4));
+  check('после прохода стоят вместе', after < before / 4,
+    `было ${before.toFixed(4)}, стало ${after.toFixed(4)}`);
+  check('поправленные дни посчитаны',
+    pass.moved + pass.kept === days.length && pass.moved > 0, JSON.stringify(pass));
+  check('разметка уехала в папку, а не только в кэш', await (async () => {
+    const prop = many.dayFile(days[1]).appProperties.eyes;
+    const inFolder = Number(String(prop).split(',')[0]);
+    return Math.abs(inFolder - (await entries.get(days[1])).eyes.lx) < 1e-4;
+  })());
+  check('снимки в памяти не осели', (await blobs.count()) === 0,
+    `тел в памяти: ${await blobs.count()}`);
+  // Далеко от руки точка уйти не может: иначе один неудачный поиск утащил бы
+  // за собой весь остаток альбома.
+  await store.putEyes(many, days[0], { lx: 0.10, ly: 0.80, rx: 0.30, ry: 0.80 });
+  await blobs.clear();
+  await store.retouchEyes(many);
+  const stubborn = (await entries.get(days[0])).eyes;
+  check('уведённый в угол день там и остался',
+    Math.abs(stubborn.lx - 0.10) < 0.02 && Math.abs(stubborn.ly - 0.80) < 0.02,
+    `(${stubborn.lx.toFixed(3)}, ${stubborn.ly.toFixed(3)})`);
 
   await clearCache();
   await settings.merge({ babyName: '', birthDate: null, driveFolderId: null,

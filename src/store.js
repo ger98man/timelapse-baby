@@ -16,8 +16,8 @@
 // миниатюр, которые Google уже сделал сам, — килобайты вместо мегабайт.
 
 import { entries, blobs, bench, settings, clearCache } from './db.js';
-import { toMaster } from './img.js';
-import { renderSquareBlob } from './align.js';
+import { toMaster, loadImage } from './img.js';
+import { renderSquareBlob, eyePatchesFromBlob, refineEyes } from './align.js';
 import { TAG, describeFile } from './drive.js';
 import { inLanes } from './pool.js';
 import { pullProfile } from './profile.js';
@@ -684,7 +684,154 @@ export async function putEyes(drive, date, eyes) {
   await bench.delete(date);          // на верстаке кадр по старым глазам
   await blobs.put({ date, photo: loaded.body.photo, aligned, stamp: frameStamp(cfg) });
   await entries.put(fresh);
+  await rememberEyes(cfg, date, loaded.body.photo, eyes);
   return fresh;
+}
+
+/**
+ * Запоминает, как выглядят глаза на этом снимке, — чтобы завтра найти их на
+ * следующем. Хранится один день, самый свежий: уточняют всегда по нему.
+ *
+ * Ничего важного здесь не происходит, поэтому и ошибки глотаются молча:
+ * разметка уже сохранена в папке, а без кусочков завтрашний день просто
+ * откроется со вчерашними точками, как открывался всегда.
+ */
+async function rememberEyes(cfg, date, photo, eyes) {
+  try {
+    const known = cfg.eyePatch;
+    // Правят старый день — свежую пачку не трогаем: уточняют по последнему
+    // размеченному дню, и старый кадр на его месте только помешал бы.
+    if (known && known.folderId === cfg.driveFolderId && known.date > date) return;
+    const pack = await eyePatchesFromBlob(photo, eyes, { target: cfg.eyeTarget });
+    await settings.set('eyePatch',
+      pack ? { ...pack, date, folderId: cfg.driveFolderId } : null);
+  } catch { /* уточнение — удобство, а не обязанность */ }
+}
+
+/**
+ * Насколько далеко уточнение вправе увести точку от той, что поставили рукой, —
+ * в долях расстояния между глазами. Не мера точности, а предохранитель: за этой
+ * чертой это уже не уточнение, а переезд на другое место снимка.
+ */
+const MAX_NUDGE = 0.35;
+
+/**
+ * Проходит альбом по порядку и доводит разметку каждого дня до глаз.
+ *
+ * Зачем это нужно. Точки на прошлых днях ставили пальцем, каждый день заново, и
+ * промахивались каждый день по-своему. В отдельном кадре промах не виден, а в
+ * готовом видео он и есть та самая мелкая дрожь: сами снимки не дрожат, дрожит
+ * разметка. Уточнение сцепляет дни друг с другом — каждый следующий находится
+ * по кусочкам предыдущего, а не заново под пальцем, — и независимой ошибке
+ * взяться становится неоткуда.
+ *
+ * Границы у прохода жёсткие, и это главное в нём:
+ *
+ *   — размеченные дни, и только они. Неразмеченный день так и останется
+ *     неразмеченным: поставить за человека первую точку — не то же самое, что
+ *     поправить поставленную им;
+ *   — дальше MAX_NUDGE от руки точка не уходит. Найденное не там (блик, ухо,
+ *     второй ребёнок в кадре) отбрасывается, и день остаётся при своей
+ *     разметке, а цепочка продолжается от неё же — ошибка не расползается;
+ *   — правка уходит в папку по одной, тем же putEyes, что и обычная разметка.
+ *     Ничего особенного с точки зрения папки здесь не происходит.
+ *
+ * @returns {Promise<{moved:number, kept:number, missed:number, total:number}>}
+ */
+export async function retouchEyes(drive, { onProgress = () => {} } = {}) {
+  const cfg = await settings.all();
+  const rows = (await entries.range('0000-01-01', '9999-12-31'))
+    .filter(r => r.fileId && r.eyes);
+  const dates = rows.map(r => r.date);
+  const known = new Map(rows.map(r => [r.date, r.eyes]));
+
+  let pack = null, prev = null, last = null;
+  let moved = 0, kept = 0, missed = 0, done = 0;
+
+  await eachMaster(drive, dates, async (date, photo) => {
+    onProgress(++done, dates.length, 'Уточняю разметку');
+    if (!photo) { missed++; return; }
+
+    const own = known.get(date);
+    let eyes = own;
+
+    if (pack && prev) {
+      try {
+        const got = await refineFromBlob(pack, photo, prev);
+        if (got && withinNudge(got, own)) { eyes = got; }
+      } catch { /* не вышло — остаёмся при своей разметке */ }
+    }
+
+    const changed = eyes !== own;
+    try {
+      if (changed) {
+        // Тело кладём заранее: putEyes ищет снимок сначала в памяти, и без
+        // этого он скачал бы тот же файл второй раз.
+        await blobs.put({ date, photo, aligned: null });
+        await putEyes(drive, date, eyes);
+        moved++;
+      } else {
+        kept++;
+      }
+      pack = await eyePatchesFromBlob(photo, eyes, { target: cfg.eyeTarget });
+      prev = pack ? eyes : null;
+      if (pack) last = date;
+    } catch {
+      missed++;
+      pack = null; prev = null;
+    } finally {
+      // Год оригиналов в памяти вкладки не держат: день обработан — и свободен.
+      await blobs.delete(date);
+    }
+  });
+
+  // Цепочка не должна обрываться на последнем дне прохода: завтрашний день
+  // продолжит её с того же места, а не начнёт заново.
+  if (pack && last) {
+    await settings.set('eyePatch', { ...pack, date: last, folderId: cfg.driveFolderId });
+  }
+  return { moved, kept, missed, total: dates.length };
+}
+
+/** Уточнение по снимку в файле: align.js работает с картинкой, не с блобом. */
+async function refineFromBlob(pack, photo, guess) {
+  const { img, width, height, release } = await loadImage(photo);
+  try {
+    return refineEyes(pack, { src: img, w: width, h: height, eyes: guess });
+  } finally {
+    release();
+  }
+}
+
+/** Ушло ли уточнение дальше, чем позволено отходить от руки. */
+function withinNudge(got, own) {
+  const span = Math.hypot(own.rx - own.lx, own.ry - own.ly);
+  if (!(span > 0)) return false;
+  return Math.hypot(got.lx - own.lx, got.ly - own.ly) < span * MAX_NUDGE
+      && Math.hypot(got.rx - own.rx, got.ry - own.ry) < span * MAX_NUDGE;
+}
+
+/**
+ * С чего начать разметку нового дня: точки ближайшего размеченного дня и,
+ * если он же последний, кусочки его кадра для уточнения.
+ *
+ * Пачка годится, только когда она снята с того самого дня, чьи точки мы
+ * подставляем, и в том же альбоме: иначе искать будем один кадр, а плясать
+ * от разметки другого.
+ */
+export async function eyeGuess(date) {
+  const cfg = await settings.all();
+  const rows = await entries.range('0000-01-01', date);
+  let ref = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].date !== date && rows[i].eyes) { ref = rows[i]; break; }
+  }
+  if (!ref) return { eyes: null, pack: null };
+
+  const pack = cfg.eyePatch;
+  const fits = pack && pack.date === ref.date && pack.folderId === cfg.driveFolderId
+    && pack.l && pack.l.length === (pack.radius * 2 + 1) ** 2;
+  return { eyes: ref.eyes, from: ref.date, pack: fits ? pack : null };
 }
 
 /** Комментарий — отдельный текстовый файл рядом со снимком. */

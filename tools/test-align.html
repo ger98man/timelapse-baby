@@ -12,11 +12,17 @@
 снимка. Второе — условие, первое — пожелание, и когда они спорят, побеждать
 обязано второе: срезанный по диагонали кадр видно сразу, а глаз, промахнувшийся
 на два пикселя, — нет.</p>
+<p class="lead">Здесь же проверяется уточнение разметки — то, что ищет вчерашние
+кусочки кадра на сегодняшнем снимке. Проверять его на живых снимках нечем,
+поэтому «лицо» рисуется прямо здесь и переснимается ближе, дальше и с наклоном:
+зато про каждый такой снимок точно известно, где у него глаза, — и есть с чем
+сравнить найденное.</p>
 <div id="out"></div>
 <div id="summary"></div>
 
 <script type="module">
-import { fitTransform, DEFAULT_TARGET } from '../src/align.js';
+import { fitTransform, DEFAULT_TARGET, PATCH,
+         projectPoint, unprojectPoint, eyePatches, refineEyes } from '../src/align.js';
 import { caseOf, check, run } from './harness.js';
 
 // --- та же арифметика, что делает канвас ------------------------------------
@@ -51,6 +57,109 @@ function coversFrame(t, iw, ih, size, slack = 0.001) {
 
 const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
 const deg = r => r * 180 / Math.PI;
+
+// --- поддельный снимок ------------------------------------------------------
+// Уточнение ищет кусочки изображения, значит проверять его надо на изображении.
+// Живой снимок для этого не годится: про него неизвестно, где у него глаза
+// на самом деле, а весь смысл проверки — сравнить найденное с настоящим.
+// Поэтому лицо рисуется здесь, и каждый «снимок» — это одно и то же лицо,
+// положенное на кадр с другим сдвигом, масштабом и наклоном.
+
+/** Одни и те же «случайные» точки при одном и том же seed. */
+function rnd(seed) {
+  let x = seed * 1103515245 + 12345;
+  return () => {
+    x = (x * 1103515245 + 12345) & 0x7fffffff;
+    return x / 0x7fffffff;
+  };
+}
+
+const EYE = { x: 0.17, y: -0.09 };   // глаз в координатах лица
+
+function drawFace(w, h, { cx = 0.5, cy = 0.5, scale = 0.3, tilt = 0,
+                          seed = 3, light = 1 } = {}) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#8d8f94';
+  ctx.fillRect(0, 0, w, h);
+
+  const unit = scale * Math.min(w, h);
+  ctx.save();
+  ctx.translate(cx * w, cy * h);
+  ctx.rotate(tilt);
+  ctx.scale(unit, unit);
+  ctx.lineWidth = 0.012;
+
+  // голова
+  ctx.fillStyle = '#d9b79a';
+  ctx.beginPath(); ctx.ellipse(0, 0, 0.52, 0.62, 0, 0, Math.PI * 2); ctx.fill();
+  // волосы — крупное пятно сверху, чтобы у кадра был не только центр
+  ctx.fillStyle = '#4a3526';
+  ctx.beginPath(); ctx.ellipse(0, -0.42, 0.5, 0.3, 0, Math.PI, 0); ctx.fill();
+
+  for (const s of [-1, 1]) {
+    // бровь
+    ctx.strokeStyle = '#5a4030';
+    ctx.beginPath();
+    ctx.moveTo(s * EYE.x - 0.1, EYE.y - 0.11);
+    ctx.quadraticCurveTo(s * EYE.x, EYE.y - 0.15, s * EYE.x + 0.1, EYE.y - 0.1);
+    ctx.stroke();
+    // белок, радужка, блик — по ним и опознаётся глаз
+    ctx.fillStyle = '#f7f4ef';
+    ctx.beginPath(); ctx.ellipse(s * EYE.x, EYE.y, 0.085, 0.05, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3b2a1d';
+    ctx.beginPath(); ctx.arc(s * EYE.x, EYE.y, 0.036, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s * EYE.x - 0.012, EYE.y - 0.014, 0.011, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // нос и рот
+  ctx.strokeStyle = '#b78f72';
+  ctx.beginPath(); ctx.moveTo(0, EYE.y + 0.04); ctx.lineTo(-0.03, 0.14); ctx.stroke();
+  ctx.fillStyle = '#b05f5a';
+  ctx.beginPath(); ctx.ellipse(0, 0.28, 0.13, 0.05, 0, 0, Math.PI * 2); ctx.fill();
+
+  // крапины: без них однотонная кожа даёт сходство где угодно
+  const next = rnd(seed);
+  ctx.fillStyle = 'rgba(90,60,40,.35)';
+  for (let i = 0; i < 260; i++) {
+    const a = next() * Math.PI * 2, r = Math.sqrt(next()) * 0.6;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 1.15, 0.004 + next() * 0.008, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // «другой свет» — то, из-за чего нельзя сравнивать яркости напрямую:
+  // весь кадр умножается на серое и темнеет целиком.
+  if (light !== 1) {
+    const v = Math.round(light * 255);
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  const put = (x, y) => {
+    const ca = Math.cos(tilt), sa = Math.sin(tilt);
+    return { x: cx * w + unit * (ca * x - sa * y),
+             y: cy * h + unit * (sa * x + ca * y) };
+  };
+  const L = put(-EYE.x, EYE.y), R = put(EYE.x, EYE.y);
+  return { canvas: c, w, h,
+           eyes: { lx: L.x / w, ly: L.y / h, rx: R.x / w, ry: R.y / h } };
+}
+
+/**
+ * Насколько разметка разошлась с настоящей — худший из двух глаз, в долях
+ * стороны снимка. Мера грубая (доли ширины и высоты складываются как есть),
+ * но одинаковая для «до» и «после», а сравниваем мы именно их.
+ */
+function eyeError(a, b) {
+  return Math.max(Math.hypot(a.lx - b.lx, a.ly - b.ly),
+                  Math.hypot(a.rx - b.rx, a.ry - b.ry));
+}
 
 // --- прогон -----------------------------------------------------------------
 run(() => {
@@ -151,6 +260,21 @@ run(() => {
     `(${hL.x.toFixed(1)}, ${hL.y.toFixed(1)})`);
   check('и кадр по-прежнему целый', coversFrame(th, 2000, 2000, SIZE).ok);
 
+  caseOf('Прямой и обратный ход — одно и то же преобразование');
+  // Внутри align.js та же арифметика, что и в project/unproject выше; если она
+  // разойдётся, уточнение начнёт возвращать точки не туда, и молча.
+  const tp = fitTransform(1600, 1200, SIZE, { lx: 0.4, ly: 0.4, rx: 0.6, ry: 0.44 });
+  let worstRound = 0;
+  for (const [x, y] of [[0, 0], [SIZE, 0], [SIZE / 3, SIZE], [640, 210]]) {
+    const mine = unproject(tp, { x, y }, SIZE);
+    const theirs = unprojectPoint(tp, SIZE, x, y);
+    worstRound = Math.max(worstRound, Math.hypot(mine.x - theirs.x, mine.y - theirs.y));
+    const back = projectPoint(tp, SIZE, theirs.x, theirs.y);
+    worstRound = Math.max(worstRound, Math.hypot(back.x - x, back.y - y));
+  }
+  check('обратный ход совпадает с проверочным и возвращается в ту же точку',
+    worstRound < 1e-6, worstRound.toExponential(2));
+
   caseOf('Размер выходного кадра ничего не меняет по сути');
   const small = fitTransform(2000, 2000, 320, eyes);
   const big = fitTransform(2000, 2000, 1080, eyes);
@@ -160,6 +284,84 @@ run(() => {
   check('масштаб отличается ровно во столько же раз',
     near(big.scale / small.scale, 1080 / 320, 1e-9),
     (big.scale / small.scale).toFixed(6));
+
+  // --- уточнение разметки ---------------------------------------------------
+
+  caseOf('Кусочки снимаются с размеченного кадра');
+  const day1 = drawFace(1200, 1600, { cx: 0.5, cy: 0.45, scale: 0.30, tilt: 0 });
+  const pack = eyePatches(day1.canvas, day1.w, day1.h, day1.eyes);
+  const side = PATCH.radius * 2 + 1;
+  check('пачка снялась', Boolean(pack));
+  check(`кусочки ${side}×${side}`,
+    pack.l.length === side * side && pack.r.length === side * side);
+  check('лицо у самого края кусочков не даёт', (() => {
+    const edgy = drawFace(1200, 1600, { cx: 0.06, cy: 0.06, scale: 0.30, tilt: 0 });
+    return eyePatches(edgy.canvas, edgy.w, edgy.h, edgy.eyes) === null;
+  })());
+
+  caseOf('Назавтра снимали иначе — точки находятся');
+  // Каждый случай — то, что бывает на самом деле: подошли ближе, наклонили
+  // телефон, сняли у окна. Вчерашние точки при этом заведомо не там, где надо.
+  for (const shot of [
+    ['сдвинулись',          { cx: 0.55, cy: 0.42, scale: 0.30, tilt: 0 }],
+    ['подошли ближе',       { cx: 0.5,  cy: 0.45, scale: 0.35, tilt: 0 }],
+    ['отошли',              { cx: 0.5,  cy: 0.45, scale: 0.26, tilt: 0 }],
+    ['наклонили телефон',   { cx: 0.5,  cy: 0.45, scale: 0.30, tilt: 9 * Math.PI / 180 }],
+    ['и сдвинулись, и наклонили',
+                            { cx: 0.46, cy: 0.49, scale: 0.32, tilt: -7 * Math.PI / 180 }],
+    ['свет другой',         { cx: 0.52, cy: 0.46, scale: 0.30, tilt: 0, light: 0.55 }],
+    ['снимок другого размера',
+                            { w: 1600, h: 1200, cx: 0.5, cy: 0.5, scale: 0.30, tilt: 0 }],
+  ]) {
+    const [label, opts] = shot;
+    const day2 = drawFace(opts.w || 1200, opts.h || 1600, opts);
+    const got = refineEyes(pack, { src: day2.canvas, w: day2.w, h: day2.h,
+                                   eyes: day1.eyes });
+    if (!got) { check(label, false, 'уточнение отказалось'); continue; }
+    // Меряем в долях снимка — в них же лежит и разметка.
+    const guessErr = eyeError(day1.eyes, day2.eyes);
+    const gotErr = eyeError(got, day2.eyes);
+    check(`${label}: точки встали на глаза`, gotErr < 0.004,
+      `ошибка ${(gotErr * 100).toFixed(2)}% ширины (вчерашние точки: ${(guessErr * 100).toFixed(2)}%)`);
+    check(`${label}: и это заметно точнее вчерашних`, gotErr < guessErr / 3,
+      `в ${(guessErr / gotErr).toFixed(1)} раза`);
+  }
+
+  caseOf('Дрожь пальца не наследуется');
+  // Тот самый случай, ради которого всё и затевалось: снимок один и тот же,
+  // но вчера в глаз промахнулись. Уточнение обязано вернуть точки на глаза,
+  // а не повторить вчерашний промах.
+  const same = drawFace(1200, 1600, { cx: 0.5, cy: 0.45, scale: 0.30, tilt: 0, seed: 7 });
+  let worstShake = 0, shakes = 0;
+  for (const [dx, dy] of [[0.004, 0], [-0.004, 0.003], [0, -0.005], [0.006, 0.004]]) {
+    const shaken = { lx: same.eyes.lx + dx, ly: same.eyes.ly + dy,
+                     rx: same.eyes.rx + dx, ry: same.eyes.ry + dy };
+    const packSame = eyePatches(same.canvas, same.w, same.h, same.eyes);
+    const got = refineEyes(packSame, { src: same.canvas, w: same.w, h: same.h,
+                                       eyes: shaken });
+    if (!got) continue;
+    shakes++;
+    worstShake = Math.max(worstShake, eyeError(got, same.eyes));
+  }
+  check('промахи разобраны', shakes === 4);
+  check('после уточнения точки в одном и том же месте', worstShake < 0.0015,
+    `худшее расхождение ${(worstShake * 100).toFixed(3)}% ширины`);
+
+  caseOf('Не нашлось — так и говорим');
+  const other = document.createElement('canvas');
+  other.width = 1200; other.height = 1600;
+  const octx = other.getContext('2d');
+  octx.fillStyle = '#777'; octx.fillRect(0, 0, 1200, 1600);
+  check('на пустом снимке уточнять нечего',
+    refineEyes(pack, { src: other, w: 1200, h: 1600, eyes: day1.eyes }) === null);
+
+  const far = drawFace(1200, 1600, { cx: 0.5, cy: 0.45, scale: 0.30, tilt: 0 });
+  const wayOff = { lx: 0.10, ly: 0.80, rx: 0.26, ry: 0.80 };
+  check('точки-догадка в другом углу — не выдумываем',
+    refineEyes(pack, { src: far.canvas, w: far.w, h: far.h, eyes: wayOff }) === null);
+
+  check('без пачки уточнять нечем',
+    refineEyes(null, { src: far.canvas, w: far.w, h: far.h, eyes: day1.eyes }) === null);
 
 });
 </script>
