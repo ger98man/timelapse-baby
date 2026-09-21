@@ -43,7 +43,9 @@ export function toast(text, ms = 2600, action = null) {
     : null;
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
+  // Длинное объяснение ошибки за две с половиной секунды не прочитать:
+  // держим строчку столько, сколько на неё нужно, — примерно 15 знаков в секунду.
+  toastTimer = setTimeout(() => el.classList.add('hidden'), Math.max(ms, String(text).length * 65));
 }
 
 /**

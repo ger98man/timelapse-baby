@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Проверка ошибок Диска</title>
+<link rel="stylesheet" href="test.css">
+</head>
+<body>
+<h1>Проверка ошибок Диска</h1>
+<p class="lead">Когда Google Диск отказывает, человек видит всплывающую
+строчку — и только по ней решает, что делать. Здесь проверяется, что каждый
+известный отказ объяснён по-русски и с починкой, что временные отказы
+повторяются сами, а запись при обрыве сети не повторяется вслепую —
+иначе в папке появились бы дубли.</p>
+<div id="out"></div>
+<div id="summary"></div>
+
+<script type="module">
+import { createDrive, explainDriveError } from '../src/drive.js';
+import { caseOf, check, run } from './harness.js';
+
+/** Ответ Google в том виде, в каком он приходит на отказ. */
+const reply = (status, reason, message = '') => ({
+  ok: false, status,
+  json: async () => ({ error: { message, errors: reason ? [{ reason }] : [] } }),
+});
+const good = body => ({ ok: true, status: 200, json: async () => body });
+
+/** Диск, который отвечает по очереди из списка и считает запросы. */
+function driveWith(replies) {
+  let calls = 0;
+  const drive = createDrive({
+    getToken: async () => 'token',
+    fetchImpl: async () => {
+      const r = replies[Math.min(calls++, replies.length - 1)];
+      if (r instanceof Error) throw r;
+      return r;
+    },
+  });
+  return { drive, calls: () => calls };
+}
+
+async function failure(p) {
+  try { await p; return null; } catch (e) { return e.message; }
+}
+
+run(async () => {
+  caseOf('Каждый отказ объяснён');
+  const quota = explainDriveError(403, 'storageQuotaExceeded',
+    "The user's Drive storage quota has been exceeded.");
+  check('кончилось место', /закончилось место/.test(quota) && /Google One/.test(quota), quota);
+  check('и без причины в теле — по тексту', /закончилось место/.test(
+    explainDriveError(403, '', "The user's Drive storage quota has been exceeded.")));
+  check('папка не выдана приложению', /Доступные мне/.test(explainDriveError(403,
+    'appNotAuthorizedToFile', 'The user has not granted the app 123 write access')));
+  check('нет прав редактора', /права редактора/.test(
+    explainDriveError(403, 'insufficientFilePermissions')));
+  check('слишком много файлов', /слишком много файлов/.test(
+    explainDriveError(403, 'activeItemCreationLimitExceeded')));
+  check('лимит частоты', /передохнуть/.test(explainDriveError(403, 'userRateLimitExceeded')));
+  check('429 — тоже лимит', /передохнуть/.test(explainDriveError(429)));
+  check('запрет администратора', /Администратор/.test(explainDriveError(403, 'domainPolicy')));
+  check('пропавший файл', /пропали/.test(explainDriveError(404, 'notFound')));
+  check('Google лежит', /не отвечает/.test(explainDriveError(503)));
+  const odd = explainDriveError(400, 'badRequest', 'Invalid field selection');
+  check('неизвестное — по-русски и с оригиналом',
+    /^Google Диск отказал \(400\)/.test(odd) && /Invalid field/.test(odd), odd);
+
+  caseOf('Что делает запрос');
+  let t = driveWith([reply(403, 'storageQuotaExceeded', 'quota has been exceeded')]);
+  let msg = await failure(t.drive.createRoot('Альбом'));
+  check('место — сразу, без повторов', t.calls() === 1 && /закончилось место/.test(msg), msg);
+
+  t = driveWith([reply(403, 'userRateLimitExceeded'), good({ id: 'x' })]);
+  const root = await t.drive.createRoot('Альбом');
+  check('лимит под видом 403 — повторили и прошли', root.id === 'x' && t.calls() === 2);
+
+  t = driveWith([new TypeError('Load failed'), good({ id: 'r', trashed: false })]);
+  const found = await t.drive.getFolder('r');
+  check('чтение при обрыве сети повторяется', found && found.id === 'r' && t.calls() === 2);
+
+  t = driveWith([new TypeError('Load failed'), good({ id: 'dup' })]);
+  msg = await failure(t.drive.createRoot('Альбом'));
+  check('запись при обрыве — не повторяется', t.calls() === 1 && /Нет связи/.test(msg), msg);
+
+  // Чужую папку, открытую только на чтение, пометить нельзя, но открыть
+  // её человек всё равно должен. Решается это по коду ответа, а не по тексту —
+  // текст теперь человеческий и может меняться.
+  t = driveWith([reply(403, 'insufficientFilePermissions')]);
+  const adopted = await t.drive.adoptRoot('shared');
+  check('папка только на чтение всё равно выбирается', adopted === 'shared');
+  t = driveWith([reply(403, 'storageQuotaExceeded')]);
+  const e403 = await t.drive.createRoot('Альбом').catch(e => e);
+  check('на ошибке остаётся код ответа', e403.status === 403);
+});
+</script>
+</body>
+</html>

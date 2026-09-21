@@ -26,7 +26,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PAGES = ['align', 'dates', 'store', 'zip']
+PAGES = ['align', 'dates', 'drive', 'store', 'zip']
 PORT = 8799          # не 8787: рядом может идти обычная разработка
 
 # Сколько ждать итога. Виртуальным временем Chrome здесь не обойтись: половина

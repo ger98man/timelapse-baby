@@ -52,6 +52,63 @@ export const rootName = (base, email) => (email ? `${base} — ${email}` : base)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Лимиты частоты Google присылает не только как 429, но и как 403 — с причиной
+ * в теле. Это та же просьба «подождите», и лечится она тем же повтором.
+ */
+const RETRY_REASONS = /^(userRateLimitExceeded|rateLimitExceeded|backendError|internalError)$/;
+
+/**
+ * Отказ Диска — человеческими словами. Английское сообщение Google написано
+ * для программиста: человеку с ребёнком на руках «storage quota has been
+ * exceeded» не говорит, что делать. Поэтому на каждую причину — что случилось
+ * и как это починить. Неизвестное оставляем как есть, но по-русски в начале:
+ * так его хотя бы можно переслать и найти.
+ *
+ * @param {number} status HTTP-код ответа
+ * @param {string} reason error.errors[0].reason из тела ответа
+ * @param {string} detail error.message из тела ответа
+ */
+export function explainDriveError(status, reason = '', detail = '') {
+  const says = (re) => re.test(reason) || re.test(detail);
+
+  if (says(/storageQuotaExceeded|storage quota has been exceeded/i)) {
+    return 'На Google Диске закончилось место — снимок некуда положить. ' +
+      'Освободите место (и очистите корзину Диска) или докупите его в Google One: ' +
+      'one.google.com/storage. Место считается у аккаунта, которым вы вошли.';
+  }
+  if (says(/has not granted the app|appNotAuthorizedTo/i)) {
+    return 'Приложению не выдан доступ к этой папке. Нажмите «Выбрать папку ' +
+      'в Google Диск» и выберите её на вкладке «Доступные мне». ' +
+      'Если папку так и не пускает — попросите первого родителя дать ' +
+      'вам права редактора.';
+  }
+  if (says(/insufficientFilePermissions|insufficientPermissions|cannotAddParent|cannotModify/i)) {
+    return 'У этого аккаунта нет прав менять папку альбома. Попросите ' +
+      'владельца папки дать вам права редактора.';
+  }
+  if (says(/activeItemCreationLimitExceeded|numChildrenInNonRootLimitExceeded|teamDriveFileLimitExceeded/i)) {
+    return 'В Google Диске слишком много файлов — Google не даёт завести новые. ' +
+      'Удалите лишнее и очистите корзину Диска.';
+  }
+  if (says(/dailyLimitExceeded|quotaExceeded|userRateLimitExceeded|rateLimitExceeded/i) || status === 429) {
+    return 'Google Диск просит передохнуть — слишком много запросов подряд. ' +
+      'Попробуйте через пару минут.';
+  }
+  if (says(/domainPolicy/i)) {
+    return 'Администратор вашей почты запретил сторонним приложениям работать ' +
+      'с Диском. Войдите другим аккаунтом Google.';
+  }
+  if (status === 404 || says(/notFound/i)) {
+    return 'Файл или папка альбома пропали из Google Диска — возможно, их удалили ' +
+      'или забрали доступ. Проверьте корзину Диска или выберите папку заново.';
+  }
+  if (status >= 500) {
+    return 'Google Диск сейчас не отвечает. Ничего не потерялось — попробуйте чуть позже.';
+  }
+  return `Google Диск отказал (${status})${detail ? ': ' + detail : ''}`;
+}
+
 export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
   const folderCache = new Map();   // 'rootId/2026/09' -> folderId
 
@@ -60,16 +117,41 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     let stale = null;                 // токен, который Google только что отверг
     for (let attempt = 0; attempt < 5; attempt++) {
       const token = await getToken(stale ? { stale } : undefined);
-      const res = await fetchImpl(url, {
-        method,
-        body,
-        headers: { Authorization: 'Bearer ' + token, ...headers },
-      });
+      let res;
+      try {
+        res = await fetchImpl(url, {
+          method,
+          body,
+          headers: { Authorization: 'Bearer ' + token, ...headers },
+        });
+      } catch {
+        // Сеть: пропал вай-фай, телефон уснул посреди загрузки. Браузер
+        // говорит «Load failed» или «Failed to fetch» — человеку это ничего
+        // не объясняет. Чтение часто проходит со второго раза, а запись
+        // повторять вслепую нельзя: Google мог файл уже принять, и повтор
+        // положил бы в папку второй такой же.
+        lastError = new Error('Нет связи с Google Диском. Проверьте интернет и попробуйте ещё раз.');
+        if (method !== 'GET') throw lastError;
+        await sleep(400 * Math.pow(2, attempt));
+        continue;
+      }
       if (res.ok) return raw ? res : res.json();
 
-      // 429 и пятисотые — подождать и повторить, остальное чинить бесполезно
-      if (res.status === 429 || res.status >= 500) {
-        lastError = new Error(`Google ответил ${res.status}`);
+      let detail = '';
+      let reason = '';
+      if (res.status !== 401) {
+        try {
+          const err = (await res.json()).error;
+          detail = err.message || '';
+          reason = (err.errors && err.errors[0] && err.errors[0].reason) || '';
+        } catch { /* пустой ответ */ }
+      }
+
+      // 429, пятисотые и лимиты частоты под видом 403 — подождать и повторить,
+      // остальное чинить бесполезно
+      if (res.status === 429 || res.status >= 500 ||
+          (res.status === 403 && RETRY_REASONS.test(reason))) {
+        lastError = new Error(explainDriveError(res.status, reason, detail));
         await sleep(400 * Math.pow(2, attempt));
         continue;
       }
@@ -82,19 +164,6 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
         stale = token;
         continue;
       }
-      let detail = '';
-      try { detail = (await res.json()).error.message; } catch { /* пустой ответ */ }
-
-      // Отдельный случай: папку выбрали, но доступ к ней приложению не выдан.
-      // Техническое «has not granted the app … access» не говорит человеку
-      // ничего, а починка ровно одна — выбрать папку заново.
-      if (res.status === 403 && /has not granted the app/.test(detail)) {
-        throw new Error(
-          'Приложению не выдан доступ к этой папке. Нажмите «Выбрать папку ' +
-          'в Google Диск» и выберите её на вкладке «Доступные мне». ' +
-          'Если папку так и не пускает — попросите первого родителя дать ' +
-          'вам права редактора.');
-      }
       // И новый токен не приняли — значит дело не в токене, а во входе.
       // Английское «invalid authentication credentials» человеку не говорит
       // ничего, а починка ровно одна: войти в Google заново.
@@ -103,7 +172,11 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
         e.code = 'auth';
         throw e;
       }
-      throw new Error(`Google Диск: ${res.status}${detail ? ' — ' + detail : ''}`);
+      // Код ответа остаётся на ошибке: по нему, а не по тексту, решают,
+      // можно ли отказ пережить (см. mark).
+      const e = new Error(explainDriveError(res.status, reason, detail));
+      e.status = res.status;
+      throw e;
     }
     throw lastError;
   }
@@ -614,7 +687,7 @@ export function createDrive({ getToken, fetchImpl = fetch.bind(globalThis) }) {
     } catch (e) {
       // Доступ на чтение — пометить нельзя, но смотреть можно. Падать тут
       // нельзя: человек выбрал папку, и она обязана открыться.
-      if (!/^Google Диск: 40[34]/.test(e.message || '')) throw e;
+      if (e.status !== 403 && e.status !== 404) throw e;
     }
     return folderId;
   }
