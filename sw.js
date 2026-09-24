@@ -19,6 +19,7 @@ const SHELL = [
   './styles.css',
   './manifest.webmanifest',
   './config.js',
+  './src/theme.js',
   './src/app.js',
   './src/ui.js',
   './src/session.js',

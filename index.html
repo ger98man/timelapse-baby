@@ -2,6 +2,25 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<!-- Токен в localStorage открывает весь Диск человека, а не только альбом.
+     Поэтому страница исполняет только свои файлы и скрипты Google и говорит
+     только с Google: даже если однажды в разметку пролезет чужой текст, он
+     не запустится, а запустившись — не сможет никуда отослать токен.
+     Стили разрешены встроенные: их вставляет окно выбора папки Google, а
+     увести токен стилем нельзя. Новый адрес, куда ходит приложение, — сначала
+     строка здесь, иначе браузер молча его отрежет. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' https://accounts.google.com/gsi/client https://apis.google.com;
+  connect-src 'self' https://www.googleapis.com https://accounts.google.com/gsi/;
+  img-src 'self' data: blob: https://*.googleusercontent.com https://drive.google.com;
+  media-src 'self' blob:;
+  style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style;
+  frame-src https://accounts.google.com https://docs.google.com https://drive.google.com;
+  worker-src 'self';
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none'">
 <title>TimelapseBaby</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#FFF6F9">
@@ -42,28 +61,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="TimelapseBaby">
 <link rel="stylesheet" href="styles.css">
-<script>
-// Оформление известно до первой отрисовки. Настоящее значение лежит в базе,
-// рядом с остальными настройками, но база отвечает не сразу, а красить надо
-// сейчас — поэтому app.js держит здесь же, в localStorage, слепок имени темы.
-// Скрипт стоит после таблицы стилей намеренно: браузер её уже дождался, и
-// цвета темы можно не повторять руками, а спросить у самой темы.
-(function () {
-  var name;
-  try { name = localStorage.getItem('theme'); } catch (e) { /* приватный режим */ }
-  // «default» — имя убранного тёмного оформления: у тех, кто сидел на нём,
-  // в localStorage оно ещё лежит.
-  document.documentElement.dataset.theme =
-    (name === 'girl' || name === 'boy') ? name : 'girl';
-  var css = getComputedStyle(document.documentElement);
-  var meta = function (which, value) {
-    var el = document.querySelector('meta[name="' + which + '"]');
-    if (el && value) el.content = value.trim();
-  };
-  meta('theme-color', css.getPropertyValue('--bg'));
-  meta('apple-mobile-web-app-status-bar-style', css.getPropertyValue('--status-bar'));
-})();
-</script>
+<script src="src/theme.js"></script>
 </head>
 <body>
 
